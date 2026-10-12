@@ -1,0 +1,51 @@
+{
+  "source_tool": "eeap-sample/1.0",
+  "findings": [
+    {
+      "asset_id": "DC01",
+      "control_id": "AD-001",
+      "status": "FAIL",
+      "evidence": {"summary": "Domain password policy minimum length is 8 (baseline: 14)", "min_length": 8},
+      "recommendation": "Raise the default domain policy minimum password length to 14 or use fine-grained policies."
+    },
+    {
+      "asset_id": "DC01",
+      "control_id": "AD-007",
+      "status": "FAIL",
+      "subject_key": "CN=Domain Admins,CN=Users,DC=corp,DC=local",
+      "evidence": {"summary": "Domain Admins has 9 members (baseline: <= 4)", "member_count": 9}
+    },
+    {
+      "asset_id": "SQL01",
+      "control_id": "AD-002",
+      "status": "FAIL",
+      "subject_key": "CN=svc_sql,OU=Service Accounts,DC=corp,DC=local",
+      "evidence": {"summary": "Service account is a member of a privileged group and its password is 900 days old"}
+    },
+    {
+      "asset_id": "SQL01",
+      "control_id": "AD-002",
+      "status": "FAIL",
+      "subject_key": "CN=svc_backup,OU=Service Accounts,DC=corp,DC=local",
+      "evidence": {"summary": "Service account password never expires"}
+    },
+    {
+      "asset_id": "FS01",
+      "control_id": "WIN-002",
+      "status": "FAIL",
+      "evidence": {"summary": "SMBv1 server component is enabled"}
+    },
+    {
+      "asset_id": "FS01",
+      "control_id": "WIN-001",
+      "status": "WARNING",
+      "evidence": {"summary": "SMB signing is enabled but not required"}
+    },
+    {
+      "asset_id": "WS-1001",
+      "control_id": "WIN-006",
+      "status": "PASS",
+      "evidence": {"summary": "RDP requires Network Level Authentication"}
+    }
+  ]
+}

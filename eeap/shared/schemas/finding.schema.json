@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eeap.local/v1/finding.schema.json",
+  "title": "EEAP Standard Finding",
+  "description": "Normalized finding produced by every collector, agent and import adapter.",
+  "type": "object",
+  "required": ["finding_id", "asset_id", "control_id", "control_name", "category", "severity", "status", "evidence", "recommendation", "raw_data", "created_at"],
+  "properties": {
+    "finding_id":     {"type": "string", "format": "uuid"},
+    "asset_id":       {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "control_id":     {"type": "string", "pattern": "^[A-Z]{2,8}-[0-9]{3,4}$", "examples": ["AD-001", "WIN-004", "NET-002"]},
+    "control_name":   {"type": "string", "minLength": 1, "maxLength": 200},
+    "category":       {"type": "string", "minLength": 1, "maxLength": 100},
+    "severity":       {"$ref": "#/$defs/severity"},
+    "status":         {"$ref": "#/$defs/status"},
+    "evidence":       {"type": "object", "description": "Summarized, UI-safe evidence. Must not contain secrets or credential material."},
+    "recommendation": {"type": "string", "maxLength": 8000},
+    "raw_data":       {"type": "object", "description": "Small raw payload (<= 64 KiB). Larger payloads are referenced via raw_data_ref."},
+    "created_at":     {"type": "string", "format": "date-time"},
+
+    "fingerprint":     {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "subject_key":     {"type": "string", "maxLength": 1024},
+    "lifecycle_state": {"enum": ["open", "acknowledged", "in_remediation", "resolved", "risk_accepted", "false_positive"]},
+    "raw_data_ref":    {"type": ["string", "null"], "format": "uuid"},
+    "source":          {"enum": ["server", "agent", "import"]},
+    "source_tool":     {"type": "string"},
+    "run_id":          {"type": ["string", "null"], "format": "uuid"},
+    "first_seen_at":   {"type": "string", "format": "date-time"},
+    "last_seen_at":    {"type": "string", "format": "date-time"},
+    "updated_at":      {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "severity": {"enum": ["Critical", "High", "Medium", "Low", "Informational"]},
+    "status":   {"enum": ["PASS", "FAIL", "WARNING", "INFO"]}
+  },
+  "examples": [
+    {
+      "finding_id": "0192a6b2-6c1e-7a3e-9b51-2f0d7a1c9e01",
+      "asset_id": "DC01",
+      "control_id": "WIN-004",
+      "control_name": "LDAP Signing",
+      "category": "Protocol Hardening",
+      "severity": "High",
+      "status": "FAIL",
+      "evidence": {"setting": "LDAPServerIntegrity", "observed": 1, "expected": 2},
+      "recommendation": "Require LDAP signing on all domain controllers via Group Policy.",
+      "raw_data": {},
+      "created_at": "2026-10-12T08:00:00Z"
+    }
+  ]
+}

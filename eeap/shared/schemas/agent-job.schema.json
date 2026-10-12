@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eeap.local/v1/agent-job.schema.json",
+  "title": "EEAP Agent Job and Result",
+  "description": "Jobs reference built-in, allow-listed collector IDs with declarative parameters. Agents reject any collector_id not compiled into the signed agent binary. There is no field for commands, scripts or code.",
+  "$defs": {
+    "job": {
+      "type": "object",
+      "required": ["job_id", "run_id", "collector_id", "params", "expires_at"],
+      "properties": {
+        "job_id":       {"type": "string", "format": "uuid"},
+        "run_id":       {"type": "string", "format": "uuid"},
+        "collector_id": {"type": "string", "pattern": "^(win|linux)\\.[a-z_]+$", "examples": ["win.smb_config", "linux.ssh_config"]},
+        "params":       {"type": "object", "description": "Declarative options (e.g. include_disabled_services). Validated against the collector's own parameter schema.", "maxProperties": 20},
+        "expires_at":   {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "required": ["job_id", "status", "collected_at", "agent_version", "payload_sha256"],
+      "properties": {
+        "job_id":         {"type": "string", "format": "uuid"},
+        "status":         {"enum": ["succeeded", "failed", "unsupported"]},
+        "collected_at":   {"type": "string", "format": "date-time"},
+        "agent_version":  {"type": "string"},
+        "payload":        {"type": "object", "description": "Collector output (configuration facts). Inline up to 1 MiB."},
+        "payload_ref":    {"type": ["string", "null"], "description": "Upload ID when payload was sent via the chunked upload endpoint."},
+        "payload_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "relationships":  {"type": "array", "items": {"$ref": "relationship.schema.json"}, "maxItems": 50000},
+        "error":          {"type": ["string", "null"], "maxLength": 4000}
+      },
+      "additionalProperties": false
+    }
+  }
+}

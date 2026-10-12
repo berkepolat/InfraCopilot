@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eeap.local/v1/event-envelope.schema.json",
+  "title": "EEAP Event Envelope",
+  "description": "CloudEvents-inspired envelope for all events on Redis Streams. Payloads larger than 256 KiB use data_ref (claim check in MinIO).",
+  "type": "object",
+  "required": ["event_id", "type", "schema_version", "source", "occurred_at", "correlation_id", "data"],
+  "properties": {
+    "event_id":       {"type": "string", "format": "uuid", "description": "UUIDv7; consumers deduplicate on this value."},
+    "type":           {"type": "string", "pattern": "^[a-z]+\\.[a-z_]+$", "examples": ["finding.created", "assessment.run_completed"]},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "source":         {"type": "string", "examples": ["assessment-service", "api-gateway"]},
+    "occurred_at":    {"type": "string", "format": "date-time"},
+    "correlation_id": {"type": "string", "description": "Request ID or run ID that caused this event chain."},
+    "causation_id":   {"type": ["string", "null"], "format": "uuid", "description": "event_id of the triggering event, if any."},
+    "subject":        {"type": ["string", "null"], "description": "Primary entity ID, e.g. run_id, asset_id, finding_id."},
+    "actor":          {
+      "type": ["object", "null"],
+      "properties": {
+        "type": {"enum": ["user", "agent", "api_key", "service", "system"]},
+        "id":   {"type": "string"}
+      }
+    },
+    "data":           {"type": "object"},
+    "data_ref":       {
+      "type": ["object", "null"],
+      "properties": {
+        "bucket":     {"type": "string"},
+        "object_key": {"type": "string"},
+        "sha256":     {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,6 @@
+asset_id,control_id,status,severity,subject_key,evidence,recommendation,source_tool
+WS-1001,WIN-003,FAIL,,,"LmCompatibilityLevel is 3 (baseline: 5, NTLMv2 only)",Set Network security: LAN Manager authentication level to send NTLMv2 response only,eeap-sample-csv/1.0
+WS-1001,WIN-009,PASS,,,Endpoint protection agent is installed and running,,eeap-sample-csv/1.0
+NTP01,NET-005,WARNING,Low,,NTP service accepts mode 6 queries from any source,Restrict NTP control queries to management networks,eeap-sample-csv/1.0
+BAD ROW,WIN-003,FAIL,,,asset_id with a space is rejected,,eeap-sample-csv/1.0
+WS-1001,XX-1,FAIL,,,control_id that does not match the catalog format is rejected,,eeap-sample-csv/1.0

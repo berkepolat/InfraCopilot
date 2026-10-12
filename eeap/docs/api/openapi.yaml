@@ -1,0 +1,1194 @@
+openapi: 3.1.0
+info:
+  title: EEAP Public API (API Gateway)
+  version: 1.0.0-phase1
+  description: |
+    External contract of the Enterprise Exposure Assessment Platform, served by the API Gateway
+    at `/api/v1`. Upstream services expose the same paths internally (without the gateway prefix
+    rewrite) and accept only gateway-minted internal service tokens.
+
+    Conventions:
+    - Authentication: `Authorization: Bearer <JWT>` (users), mTLS + agent JWT (agents), `X-API-Key` (integrations).
+    - Pagination: keyset; request `limit` (1-500, default 50) and `cursor`; response `next_cursor`.
+    - Errors: RFC 9457 `application/problem+json`.
+    - Every response carries `X-Request-ID`. Rate-limited responses return 429 with `Retry-After`.
+    - Required permission per operation is listed in `x-permission`.
+servers:
+  - url: https://eeap.example.internal/api/v1
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+  - name: Users
+  - name: Agents
+  - name: Agent Channel
+    description: Endpoints called by enrolled agents (mTLS required).
+  - name: Assets
+  - name: Assessments
+  - name: Controls
+  - name: Findings
+  - name: Graph
+  - name: Risk
+  - name: Reports
+  - name: Integrations
+  - name: Audit
+  - name: System
+
+paths:
+  # ------------------------------------------------------------------ Auth
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Exchange credentials for tokens
+      security: []
+      x-rate-limit: 10/min per IP and per username
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: {type: string}
+                password: {type: string, format: password}
+                mfa_code: {type: string}
+      responses:
+        '200': {description: Authenticated, content: {application/json: {schema: {$ref: '#/components/schemas/TokenPair'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '423': {description: Account locked, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate refresh token and obtain a new access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [refresh_token], properties: {refresh_token: {type: string}}}
+      responses:
+        '200': {description: Rotated, content: {application/json: {schema: {$ref: '#/components/schemas/TokenPair'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the current refresh token family
+      responses:
+        '204': {description: Logged out}
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current principal, roles and effective permissions
+      responses:
+        '200':
+          description: Principal
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id: {type: string, format: uuid}
+                  username: {type: string}
+                  roles: {type: array, items: {type: string}}
+                  permissions: {type: array, items: {type: string}}
+  /auth/.well-known/jwks.json:
+    get:
+      tags: [Auth]
+      summary: Public keys for JWT verification
+      security: []
+      responses:
+        '200': {description: JWKS, content: {application/json: {schema: {type: object}}}}
+
+  # ------------------------------------------------------------------ Users
+  /users:
+    get:
+      tags: [Users]
+      x-permission: users:read
+      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200': {description: Users, content: {application/json: {schema: {$ref: '#/components/schemas/UserPage'}}}}
+    post:
+      tags: [Users]
+      x-permission: users:manage
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/UserCreate'}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/User'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /users/{user_id}/roles:
+    put:
+      tags: [Users]
+      x-permission: users:manage
+      parameters: [{name: user_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                required: [role_id]
+                properties:
+                  role_id: {type: string}
+                  scope: {type: object}
+      responses:
+        '200': {description: Roles replaced}
+  /api-keys:
+    post:
+      tags: [Users]
+      x-permission: users:manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, permissions, expires_at]
+              properties:
+                name: {type: string}
+                permissions: {type: array, items: {type: string}}
+                expires_at: {type: string, format: date-time}
+      responses:
+        '201':
+          description: Key created. The secret is returned exactly once.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_key_id: {type: string, format: uuid}
+                  key: {type: string}
+                  key_prefix: {type: string}
+
+  # ------------------------------------------------------------------ Agents (admin)
+  /agents:
+    get:
+      tags: [Agents]
+      x-permission: agents:read
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: status, in: query, schema: {type: string, enum: [active, stale, suspended, revoked]}}
+        - {name: platform, in: query, schema: {type: string, enum: [windows, linux]}}
+      responses:
+        '200': {description: Agents, content: {application/json: {schema: {$ref: '#/components/schemas/AgentPage'}}}}
+  /agents/{agent_id}:
+    get:
+      tags: [Agents]
+      x-permission: agents:read
+      parameters: [{$ref: '#/components/parameters/AgentId'}]
+      responses:
+        '200': {description: Agent, content: {application/json: {schema: {$ref: '#/components/schemas/Agent'}}}}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /agents/{agent_id}/suspend:
+    post:
+      tags: [Agents]
+      x-permission: agents:manage
+      parameters: [{$ref: '#/components/parameters/AgentId'}]
+      responses:
+        '200': {description: Suspended}
+  /agents/{agent_id}/revoke:
+    post:
+      tags: [Agents]
+      x-permission: agents:manage
+      parameters: [{$ref: '#/components/parameters/AgentId'}]
+      requestBody:
+        content: {application/json: {schema: {type: object, properties: {reason: {type: string}}}}}
+      responses:
+        '200': {description: Certificate revoked; agent can no longer authenticate}
+  /agents/enrollment-tokens:
+    post:
+      tags: [Agents]
+      x-permission: agents:manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, expires_in_hours]
+              properties:
+                platform: {type: string, enum: [windows, linux, any]}
+                max_uses: {type: integer, minimum: 1, maximum: 10000, default: 1}
+                expires_in_hours: {type: integer, minimum: 1, maximum: 168}
+                labels: {type: object}
+      responses:
+        '201':
+          description: Token returned exactly once.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token_id: {type: string, format: uuid}
+                  token: {type: string}
+                  expires_at: {type: string, format: date-time}
+
+  # ------------------------------------------------------------------ Agent channel
+  /agent/enroll:
+    post:
+      tags: [Agent Channel]
+      summary: Exchange a one-time enrollment token and CSR for an agent client certificate
+      description: |
+        Called over server-authenticated TLS (no client cert yet). The agent generates its key pair locally;
+        the private key never leaves the host. The gateway validates the token, signs the CSR with the
+        internal Agent CA (short validity, e.g. 30 days) and binds the certificate thumbprint to the agent record.
+      security: [{enrollmentToken: []}]
+      x-rate-limit: 5/min per IP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [csr_pem, hostname, platform, agent_version, capabilities]
+              properties:
+                csr_pem: {type: string}
+                hostname: {type: string}
+                fqdn: {type: string}
+                platform: {type: string, enum: [windows, linux]}
+                os_version: {type: string}
+                agent_version: {type: string}
+                capabilities: {type: array, items: {type: string}}
+      responses:
+        '201':
+          description: Enrolled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agent_id: {type: string, format: uuid}
+                  certificate_pem: {type: string}
+                  ca_chain_pem: {type: string}
+                  expires_at: {type: string, format: date-time}
+                  poll_interval_seconds: {type: integer}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /agent/token:
+    post:
+      tags: [Agent Channel]
+      summary: Obtain a short-lived agent JWT bound to the presented client certificate
+      security: [{agentMtls: []}]
+      responses:
+        '200': {description: Token, content: {application/json: {schema: {$ref: '#/components/schemas/AccessToken'}}}}
+  /agent/renew:
+    post:
+      tags: [Agent Channel]
+      summary: Renew client certificate before expiry (new CSR, same agent identity)
+      security: [{agentMtls: [], agentJwt: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [csr_pem], properties: {csr_pem: {type: string}}}}}
+      responses:
+        '200': {description: Renewed certificate}
+  /agent/heartbeat:
+    post:
+      tags: [Agent Channel]
+      security: [{agentMtls: [], agentJwt: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_version]
+              properties:
+                agent_version: {type: string}
+                os_version: {type: string}
+                capabilities: {type: array, items: {type: string}}
+                spool_depth: {type: integer}
+      responses:
+        '200':
+          description: Acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs_available: {type: boolean}
+                  poll_interval_seconds: {type: integer}
+                  cert_renewal_due: {type: boolean}
+  /agent/jobs:
+    get:
+      tags: [Agent Channel]
+      summary: Pull pending jobs for this agent
+      security: [{agentMtls: [], agentJwt: []}]
+      parameters: [{name: max, in: query, schema: {type: integer, minimum: 1, maximum: 20, default: 5}}]
+      responses:
+        '200':
+          description: Jobs (possibly empty)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs: {type: array, items: {$ref: '../../shared/schemas/agent-job.schema.json#/$defs/job'}}
+  /agent/jobs/{job_id}/result:
+    post:
+      tags: [Agent Channel]
+      summary: Submit collector result for a job
+      security: [{agentMtls: [], agentJwt: []}]
+      parameters: [{name: job_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '../../shared/schemas/agent-job.schema.json#/$defs/result'}}}
+      responses:
+        '202': {description: Accepted for evaluation}
+        '409': {description: Job not assigned to this agent or already completed}
+        '413': {description: Payload too large; use /agent/uploads}
+  /agent/uploads:
+    post:
+      tags: [Agent Channel]
+      summary: Upload a large result payload (streamed to MinIO), returns payload_ref
+      security: [{agentMtls: [], agentJwt: []}]
+      requestBody:
+        required: true
+        content: {application/octet-stream: {schema: {type: string, format: binary}}}
+      responses:
+        '201': {description: Stored, content: {application/json: {schema: {type: object, properties: {payload_ref: {type: string}, sha256: {type: string}}}}}}
+
+  # ------------------------------------------------------------------ Assets
+  /assets:
+    get:
+      tags: [Assets]
+      x-permission: assets:read
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: q, in: query, description: Hostname / FQDN search, schema: {type: string}}
+        - {name: asset_type, in: query, schema: {type: string}}
+        - {name: criticality, in: query, schema: {type: string, enum: [Critical, High, Medium, Low]}}
+        - {name: environment, in: query, schema: {type: string}}
+        - {name: tier, in: query, schema: {type: string}}
+        - {name: owner_id, in: query, schema: {type: string, format: uuid}}
+        - {name: status, in: query, schema: {type: string, enum: [active, discovered, retired]}}
+        - {name: tag, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true}
+      responses:
+        '200': {description: Assets, content: {application/json: {schema: {$ref: '#/components/schemas/AssetPage'}}}}
+    post:
+      tags: [Assets]
+      x-permission: assets:write
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '../../shared/schemas/asset.schema.json'}}}
+      responses:
+        '201': {description: Created, content: {application/json: {schema: {$ref: '../../shared/schemas/asset.schema.json'}}}}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationError'}
+  /assets/bulk:
+    post:
+      tags: [Assets]
+      x-permission: assets:write
+      summary: Upsert up to 1,000 assets (CSV import is converted to this format by the UI)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: array, maxItems: 1000, items: {$ref: '../../shared/schemas/asset.schema.json'}}
+      responses:
+        '200':
+          description: Per-item results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created: {type: integer}
+                  updated: {type: integer}
+                  errors: {type: array, items: {type: object, properties: {index: {type: integer}, error: {type: string}}}}
+  /assets/{asset_id}:
+    get:
+      tags: [Assets]
+      x-permission: assets:read
+      parameters: [{$ref: '#/components/parameters/AssetId'}]
+      responses:
+        '200': {description: Asset, content: {application/json: {schema: {$ref: '../../shared/schemas/asset.schema.json'}}}}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [Assets]
+      x-permission: assets:write
+      parameters: [{$ref: '#/components/parameters/AssetId'}, {$ref: '#/components/parameters/IfMatch'}]
+      requestBody:
+        required: true
+        content: {application/merge-patch+json: {schema: {type: object}}}
+      responses:
+        '200': {description: Updated}
+        '412': {description: ETag mismatch (concurrent update)}
+    delete:
+      tags: [Assets]
+      x-permission: assets:delete
+      summary: Retire an asset (soft delete)
+      parameters: [{$ref: '#/components/parameters/AssetId'}]
+      responses:
+        '204': {description: Retired}
+  /assets/{asset_id}/findings:
+    get:
+      tags: [Assets, Findings]
+      x-permission: findings:read
+      parameters: [{$ref: '#/components/parameters/AssetId'}, {$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200': {description: Findings, content: {application/json: {schema: {$ref: '#/components/schemas/FindingPage'}}}}
+  /owners:
+    get:
+      tags: [Assets]
+      x-permission: assets:read
+      responses:
+        '200': {description: Owners, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Owner'}}}}}
+    post:
+      tags: [Assets]
+      x-permission: assets:write
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Owner'}}}
+      responses:
+        '201': {description: Created}
+
+  # ------------------------------------------------------------------ Assessments
+  /assessments/profiles:
+    get:
+      tags: [Assessments]
+      x-permission: assessments:read
+      responses:
+        '200': {description: Profiles, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/AssessmentProfile'}}}}}
+    post:
+      tags: [Assessments]
+      x-permission: assessments:manage
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/AssessmentProfile'}}}
+      responses:
+        '201': {description: Created}
+  /assessments/runs:
+    get:
+      tags: [Assessments]
+      x-permission: assessments:read
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: status, in: query, schema: {type: string}}
+      responses:
+        '200': {description: Runs, content: {application/json: {schema: {$ref: '#/components/schemas/RunPage'}}}}
+    post:
+      tags: [Assessments]
+      x-permission: assessments:run
+      summary: Start an AD configuration assessment run
+      description: |
+        Runs the enabled AD controls (all of them when `control_ids` is omitted) against the
+        configured domain over read-only LDAPS. Profiles and asset scopes are not implemented yet.
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                control_ids: {type: array, maxItems: 50, items: {type: string, pattern: '^AD-[0-9]{3}$'}}
+      responses:
+        '202':
+          description: Run queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: {type: string, format: uuid}
+                  status: {type: string, enum: [queued]}
+                  control_ids: {type: array, items: {type: string}}
+        '409': {description: Another run is still queued or running}
+        '422': {description: A requested control is not an enabled AD control}
+  /assessments/runs/{run_id}:
+    get:
+      tags: [Assessments]
+      x-permission: assessments:read
+      parameters: [{$ref: '#/components/parameters/RunId'}]
+      responses:
+        '200': {description: Run, content: {application/json: {schema: {$ref: '#/components/schemas/AssessmentRun'}}}}
+  /assessments/runs/{run_id}/cancel:
+    post:
+      tags: [Assessments]
+      x-permission: assessments:run
+      parameters: [{$ref: '#/components/parameters/RunId'}]
+      responses:
+        '202': {description: Cancellation requested}
+  /assessments/runs/{run_id}/jobs:
+    get:
+      tags: [Assessments]
+      x-permission: assessments:read
+      parameters: [{$ref: '#/components/parameters/RunId'}, {$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200': {description: Jobs}
+
+  # ------------------------------------------------------------------ Controls
+  /controls:
+    get:
+      tags: [Controls]
+      x-permission: controls:read
+      parameters:
+        - {name: module, in: query, schema: {type: string, enum: [AD, WIN, NET, LINUX, CLOUD, IMPORT]}}
+        - {name: enabled, in: query, schema: {type: boolean}}
+      responses:
+        '200': {description: Control catalog, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Control'}}}}}
+  /controls/{control_id}:
+    patch:
+      tags: [Controls]
+      x-permission: controls:manage
+      parameters: [{name: control_id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: {type: boolean}
+                default_severity: {type: string}
+                exploitability: {type: number, minimum: 0, maximum: 1}
+                privilege_impact: {type: number, minimum: 0, maximum: 1}
+      responses:
+        '200': {description: Updated}
+
+  # ------------------------------------------------------------------ Findings
+  /findings:
+    get:
+      tags: [Findings]
+      x-permission: findings:read
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: severity, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true}
+        - {name: status, in: query, schema: {type: array, items: {type: string, enum: [PASS, FAIL, WARNING, INFO]}}, style: form, explode: true}
+        - {name: lifecycle_state, in: query, schema: {type: string}}
+        - {name: control_id, in: query, schema: {type: string}}
+        - {name: category, in: query, schema: {type: string}}
+        - {name: asset_id, in: query, schema: {type: string}}
+        - {name: run_id, in: query, schema: {type: string, format: uuid}}
+        - {name: sort, in: query, schema: {type: string, enum: [-risk_score, -last_seen_at, severity], default: -risk_score}}
+      responses:
+        '200': {description: Findings, content: {application/json: {schema: {$ref: '#/components/schemas/FindingPage'}}}}
+  /findings/{finding_id}:
+    get:
+      tags: [Findings]
+      x-permission: findings:read
+      parameters: [{$ref: '#/components/parameters/FindingId'}]
+      responses:
+        '200':
+          description: Finding with current risk score and history
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '../../shared/schemas/finding.schema.json'}
+                  - type: object
+                    properties:
+                      risk_score: {$ref: '#/components/schemas/RiskScore'}
+                      history: {type: array, items: {type: object}}
+                      mitre_techniques: {type: array, items: {type: string}}
+  /findings/{finding_id}/lifecycle:
+    post:
+      tags: [Findings]
+      x-permission: findings:triage
+      parameters: [{$ref: '#/components/parameters/FindingId'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lifecycle_state]
+              properties:
+                lifecycle_state:
+                  type: string
+                  enum: [open, acknowledged, in_remediation, false_positive]
+                  description: >-
+                    `resolved` is set only when a reassessment or import observes PASS; `risk_accepted`
+                    only via /risk-acceptance. Moving a risk-accepted finding to `open` revokes the acceptance.
+                note: {type: string, maxLength: 2000}
+      responses:
+        '200': {description: Updated}
+        '409': {description: Invalid transition}
+  /findings/{finding_id}/risk-acceptance:
+    post:
+      tags: [Findings]
+      x-permission: findings:accept_risk
+      parameters: [{$ref: '#/components/parameters/FindingId'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [justification, expires_at]
+              properties:
+                justification: {type: string, minLength: 20}
+                expires_at: {type: string, format: date-time}
+      responses:
+        '201': {description: Risk accepted until expiry}
+  /findings/{finding_id}/evidence:
+    get:
+      tags: [Findings]
+      x-permission: evidence:read
+      summary: Download raw evidence (audited; short-lived pre-signed redirect)
+      parameters: [{$ref: '#/components/parameters/FindingId'}]
+      responses:
+        '302': {description: Redirect to pre-signed URL (TTL 5 min)}
+
+  # ------------------------------------------------------------------ Graph
+  /graph/nodes:
+    get:
+      tags: [Graph]
+      x-permission: graph:read
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: node_type, in: query, schema: {type: string, enum: [User, Computer, Group, ServiceAccount, Tier0Asset]}}
+        - {name: is_tier0, in: query, schema: {type: boolean}}
+        - {name: q, in: query, schema: {type: string}}
+      responses:
+        '200': {description: Nodes, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/GraphNode'}}, next_cursor: {type: [string, 'null']}}}}}}
+  /graph/nodes/{node_id}/neighborhood:
+    get:
+      tags: [Graph]
+      x-permission: graph:read
+      parameters:
+        - {name: node_id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: depth, in: query, schema: {type: integer, minimum: 1, maximum: 3, default: 1}}
+        - {name: relationship, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true}
+        - {name: direction, in: query, schema: {type: string, enum: [in, out, both], default: both}}
+      responses:
+        '200': {description: Subgraph (max 2,000 nodes), content: {application/json: {schema: {$ref: '#/components/schemas/Subgraph'}}}}
+  /graph/exposure-paths:
+    get:
+      tags: [Graph]
+      x-permission: graph:read
+      summary: Privilege relationship chains from a node to Tier-0 assets (exposure analysis, bounded depth)
+      parameters:
+        - {name: from_node_id, in: query, required: true, schema: {type: string, format: uuid}}
+        - {name: max_depth, in: query, schema: {type: integer, minimum: 1, maximum: 6, default: 4}}
+        - {name: max_paths, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 10}}
+      responses:
+        '200': {description: Paths, content: {application/json: {schema: {type: object, properties: {paths: {type: array, items: {$ref: '#/components/schemas/Subgraph'}}}}}}}
+  /graph/concentration-areas:
+    get:
+      tags: [Graph]
+      x-permission: graph:read
+      responses:
+        '200': {description: Risk concentration areas from the latest analysis}
+  /graph/relationships:
+    get:
+      tags: [Graph]
+      x-permission: graph:read
+      summary: Flat relationship export in {source, relationship, target} form
+      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200':
+          description: Relationships
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: '../../shared/schemas/relationship.schema.json'}}
+                  next_cursor: {type: [string, 'null']}
+
+  # ------------------------------------------------------------------ Risk / AI
+  /risk/summary:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      summary: Organization exposure score, rating, trend and top contributors
+      responses:
+        '200':
+          description: Summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exposure_score: {$ref: '#/components/schemas/RiskScore'}
+                  trend: {type: array, items: {type: object, properties: {date: {type: string, format: date}, score: {type: integer}}}}
+                  findings_by_severity: {type: object, additionalProperties: {type: integer}}
+                  top_assets: {type: array, items: {type: object}}
+                  top_scenarios: {type: array, items: {$ref: '#/components/schemas/RiskScenario'}}
+  /risk/scores:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      parameters:
+        - {name: subject_type, in: query, required: true, schema: {type: string, enum: [finding, asset, scenario, owner, organization]}}
+        - {name: subject_id, in: query, schema: {type: string}}
+        - {name: min_score, in: query, schema: {type: integer, minimum: 0, maximum: 100}}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200': {description: Current scores}
+  /risk/scores/{subject_type}/{subject_id}/history:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      parameters:
+        - {name: subject_type, in: path, required: true, schema: {type: string, enum: [finding, asset, scenario, owner, organization]}}
+        - {name: subject_id, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200': {description: Score history (newest first) with factors and trigger}
+        '404': {description: No scores for this subject}
+  /risk/top-findings:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      summary: Highest-scoring findings with asset context and factor breakdown
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 20}}
+        - {name: min_score, in: query, schema: {type: integer, minimum: 0, maximum: 100, default: 1}}
+      responses:
+        '200': {description: Findings ordered by score}
+  /risk/top-assets:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      parameters: [{name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 20}}]
+      responses:
+        '200': {description: Assets ordered by score}
+  /risk/scenarios:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      parameters: [{name: status, in: query, schema: {type: string, enum: [active, mitigated, dismissed]}}]
+      responses:
+        '200': {description: Correlated exposure scenarios, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/RiskScenario'}}}}}
+  /risk/scenarios/{scenario_id}:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      parameters: [{name: scenario_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '200': {description: Scenario with stages, findings, remediation, narrative}
+  /risk/mitre:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      summary: ATT&CK technique coverage of open weaknesses (heatmap data)
+      responses:
+        '200': {description: Technique → findings count / max score}
+  /risk/remediation:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      summary: Prioritized remediation roadmap
+      responses:
+        '200': {description: Remediation items ordered by priority}
+  /risk/analyze:
+    post:
+      tags: [Risk]
+      x-permission: risk:manage
+      summary: Trigger re-correlation and re-scoring
+      responses:
+        '202': {description: Analysis queued}
+
+  # ------------------------------------------------------------------ Reports
+  /reports:
+    get:
+      tags: [Reports]
+      x-permission: reports:read
+      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      responses:
+        '200': {description: Reports}
+    post:
+      tags: [Reports]
+      x-permission: reports:create
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [report_type, formats]
+              properties:
+                report_type: {type: string, enum: [executive_summary, technical, security_posture, mitre_mapping, risk_dashboard, remediation_roadmap]}
+                formats: {type: array, items: {type: string, enum: [json, html, pdf]}}
+                title: {type: string}
+                parameters:
+                  type: object
+                  properties:
+                    environments: {type: array, items: {type: string}}
+                    owner_ids: {type: array, items: {type: string}}
+                    include_passed_controls: {type: boolean}
+      responses:
+        '202': {description: Report queued, content: {application/json: {schema: {$ref: '#/components/schemas/Report'}}}}
+  /reports/{report_id}:
+    get:
+      tags: [Reports]
+      x-permission: reports:read
+      parameters: [{$ref: '#/components/parameters/ReportId'}]
+      responses:
+        '200': {description: Report status, content: {application/json: {schema: {$ref: '#/components/schemas/Report'}}}}
+  /reports/{report_id}/download/{format}:
+    get:
+      tags: [Reports]
+      x-permission: reports:read
+      parameters:
+        - {$ref: '#/components/parameters/ReportId'}
+        - {name: format, in: path, required: true, schema: {type: string, enum: [json, html, pdf]}}
+      responses:
+        '302': {description: Redirect to pre-signed URL (TTL 5 min)}
+        '409': {description: Report not completed}
+
+  # ------------------------------------------------------------------ Integrations
+  /integrations:
+    get:
+      tags: [Integrations]
+      x-permission: integrations:manage
+      responses:
+        '200': {description: Configured integrations}
+    post:
+      tags: [Integrations]
+      x-permission: integrations:manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [integration_type, name, mode]
+              properties:
+                integration_type: {type: string, enum: [nessus, qualys, tenable, openvas, bloodhound, sharphound, pingcastle, purple_knight, defender, wiz, nmap_xml]}
+                name: {type: string}
+                mode: {type: string, enum: [file_import, api_pull]}
+                config: {type: object}
+                secret_ref: {type: string}
+      responses:
+        '201': {description: Created}
+  /imports:
+    post:
+      tags: [Integrations]
+      x-permission: imports:create
+      summary: Upload a findings file; the original is stored in MinIO and normalized asynchronously
+      description: |
+        The request body is the file itself. `eeap_json` accepts an array of Standard Finding
+        Format objects or `{"source_tool": "...", "findings": [...]}`; `eeap_csv` needs at least
+        the columns `asset_id`, `control_id`, `status`. `control_id` must exist in the control
+        catalog; severity, name, category and recommendation default from the catalog.
+        Invalid rows are reported in the import's `stats.errors` without failing the import.
+        Third-party adapters (Nessus, PingCastle, BloodHound, …) add further `source_type`s (ADR-0014).
+      parameters:
+        - {name: source_type, in: query, required: true, schema: {type: string, enum: [eeap_json, eeap_csv]}}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {type: string, format: binary}}
+          text/csv: {schema: {type: string, format: binary}}
+      responses:
+        '202':
+          description: Import queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  import_id: {type: string, format: uuid}
+                  run_id: {type: string, format: uuid}
+                  status: {type: string, enum: [uploaded]}
+                  sha256: {type: string}
+        '413': {description: File too large (limit 50 MiB)}
+        '415': {description: Content-Type does not match source_type}
+    get:
+      tags: [Integrations]
+      x-permission: imports:create
+      parameters: [{$ref: '#/components/parameters/Limit'}]
+      responses:
+        '200': {description: Recent imports with status and stats (created, updated, unchanged, stale, rejected, errors)}
+  /imports/{import_id}:
+    get:
+      tags: [Integrations]
+      x-permission: imports:create
+      parameters: [{name: import_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '200': {description: Import}
+        '404': {description: Not found}
+
+  # ------------------------------------------------------------------ Audit
+  /audit/events:
+    get:
+      tags: [Audit]
+      x-permission: audit:read
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {name: actor_id, in: query, schema: {type: string}}
+        - {name: action, in: query, schema: {type: string}}
+        - {name: from, in: query, schema: {type: string, format: date-time}}
+        - {name: to, in: query, schema: {type: string, format: date-time}}
+      responses:
+        '200': {description: Audit events}
+
+  # ------------------------------------------------------------------ System
+  /health/live:
+    get:
+      tags: [System]
+      security: []
+      responses:
+        '200': {description: Process alive}
+  /health/ready:
+    get:
+      tags: [System]
+      security: []
+      description: Not exposed through the edge proxy.
+      responses:
+        '200': {description: Dependencies reachable}
+        '503': {description: Not ready}
+  /version:
+    get:
+      tags: [System]
+      responses:
+        '200': {description: Build and API versions}
+
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+    apiKey: {type: apiKey, in: header, name: X-API-Key}
+    enrollmentToken: {type: http, scheme: bearer, description: One-time agent enrollment token}
+    agentMtls: {type: mutualTLS, description: Client certificate issued by the EEAP Agent CA}
+    agentJwt: {type: http, scheme: bearer, bearerFormat: JWT, description: Agent JWT bound to the client certificate thumbprint (cnf.x5t#S256)}
+
+  parameters:
+    Limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 50}}
+    Cursor: {name: cursor, in: query, schema: {type: string}}
+    AssetId: {name: asset_id, in: path, required: true, schema: {type: string}}
+    AgentId: {name: agent_id, in: path, required: true, schema: {type: string, format: uuid}}
+    FindingId: {name: finding_id, in: path, required: true, schema: {type: string, format: uuid}}
+    RunId: {name: run_id, in: path, required: true, schema: {type: string, format: uuid}}
+    ReportId: {name: report_id, in: path, required: true, schema: {type: string, format: uuid}}
+    IfMatch: {name: If-Match, in: header, schema: {type: string}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, schema: {type: string, maxLength: 128}}
+
+  responses:
+    Unauthorized: {description: Missing or invalid credentials, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+    Forbidden: {description: Insufficient permission, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+    NotFound: {description: Not found, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+    Conflict: {description: Conflict, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+    ValidationError: {description: Validation failed, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+    TooManyRequests:
+      description: Rate limited
+      headers: {Retry-After: {schema: {type: integer}}}
+      content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}
+
+  schemas:
+    Problem:
+      type: object
+      properties:
+        type: {type: string, format: uri}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        instance: {type: string}
+        request_id: {type: string}
+        errors: {type: array, items: {type: object, properties: {field: {type: string}, message: {type: string}}}}
+    AccessToken:
+      type: object
+      properties:
+        access_token: {type: string}
+        token_type: {type: string, const: Bearer}
+        expires_in: {type: integer}
+    TokenPair:
+      allOf:
+        - {$ref: '#/components/schemas/AccessToken'}
+        - type: object
+          properties:
+            refresh_token: {type: string}
+            refresh_expires_in: {type: integer}
+    User:
+      type: object
+      properties:
+        user_id: {type: string, format: uuid}
+        username: {type: string}
+        email: {type: string, format: email}
+        display_name: {type: string}
+        is_active: {type: boolean}
+        roles: {type: array, items: {type: string}}
+        last_login_at: {type: [string, 'null'], format: date-time}
+    UserCreate:
+      type: object
+      required: [username, display_name, password, roles]
+      properties:
+        username: {type: string}
+        email: {type: string, format: email}
+        display_name: {type: string}
+        password: {type: string, format: password, minLength: 14}
+        roles: {type: array, items: {type: string}}
+    UserPage:
+      type: object
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/User'}}
+        next_cursor: {type: [string, 'null']}
+    Agent:
+      type: object
+      properties:
+        agent_id: {type: string, format: uuid}
+        asset_id: {type: [string, 'null']}
+        hostname: {type: string}
+        platform: {type: string, enum: [windows, linux]}
+        agent_version: {type: string}
+        status: {type: string, enum: [active, stale, suspended, revoked]}
+        capabilities: {type: array, items: {type: string}}
+        cert_expires_at: {type: string, format: date-time}
+        last_heartbeat_at: {type: [string, 'null'], format: date-time}
+    AgentPage:
+      type: object
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Agent'}}
+        next_cursor: {type: [string, 'null']}
+    AssetPage:
+      type: object
+      properties:
+        items: {type: array, items: {$ref: '../../shared/schemas/asset.schema.json'}}
+        next_cursor: {type: [string, 'null']}
+    Owner:
+      type: object
+      required: [name]
+      properties:
+        owner_id: {type: string, format: uuid, readOnly: true}
+        name: {type: string}
+        email: {type: string, format: email}
+        escalation_contact: {type: string}
+    AssessmentProfile:
+      type: object
+      required: [name, control_ids]
+      properties:
+        profile_id: {type: string, format: uuid, readOnly: true}
+        name: {type: string}
+        description: {type: string}
+        control_ids: {type: array, items: {type: string}}
+        scope: {type: object}
+        schedule_cron: {type: [string, 'null']}
+        enabled: {type: boolean}
+    AssessmentRun:
+      type: object
+      properties:
+        run_id: {type: string, format: uuid}
+        profile_id: {type: [string, 'null'], format: uuid}
+        trigger: {type: string, enum: [manual, schedule, api, import]}
+        status: {type: string, enum: [queued, running, completed, partially_completed, failed, cancelled]}
+        scope: {type: object}
+        control_ids: {type: array, items: {type: string}}
+        stats: {type: object}
+        created_at: {type: string, format: date-time}
+        started_at: {type: [string, 'null'], format: date-time}
+        completed_at: {type: [string, 'null'], format: date-time}
+    RunPage:
+      type: object
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AssessmentRun'}}
+        next_cursor: {type: [string, 'null']}
+    Control:
+      type: object
+      properties:
+        control_id: {type: string}
+        name: {type: string}
+        module: {type: string}
+        category: {type: string}
+        default_severity: {type: string}
+        exploitability: {type: number}
+        privilege_impact: {type: number}
+        execution_site: {type: string}
+        mitre_techniques: {type: array, items: {type: string}}
+        version: {type: integer}
+        enabled: {type: boolean}
+    FindingPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            allOf:
+              - {$ref: '../../shared/schemas/finding.schema.json'}
+              - type: object
+                properties:
+                  risk_score: {type: [integer, 'null'], minimum: 0, maximum: 100}
+        next_cursor: {type: [string, 'null']}
+    RiskScore:
+      type: object
+      properties:
+        subject_type: {type: string}
+        subject_id: {type: string}
+        score: {type: integer, minimum: 0, maximum: 100}
+        rating: {type: string, enum: [Critical, High, Medium, Low]}
+        factors: {type: object}
+        model_version: {type: string}
+        computed_at: {type: string, format: date-time}
+    RiskScenario:
+      type: object
+      properties:
+        scenario_id: {type: string, format: uuid}
+        rule_id: {type: string}
+        title: {type: string}
+        summary: {type: string}
+        score: {type: integer}
+        rating: {type: string}
+        stages:
+          type: array
+          items:
+            type: object
+            properties:
+              order: {type: integer}
+              name: {type: string}
+              finding_ids: {type: array, items: {type: string, format: uuid}}
+        affected_asset_ids: {type: array, items: {type: string}}
+        status: {type: string}
+    GraphNode:
+      type: object
+      properties:
+        node_id: {type: string, format: uuid}
+        node_key: {type: string}
+        node_type: {type: string, enum: [User, Computer, Group, ServiceAccount, Tier0Asset]}
+        display_name: {type: string}
+        asset_id: {type: [string, 'null']}
+        is_tier0: {type: boolean}
+        is_privileged: {type: boolean}
+        metrics:
+          type: object
+          properties:
+            tier0_reachable: {type: boolean}
+            min_hops_to_tier0: {type: [integer, 'null']}
+            propagation_score: {type: number}
+            concentration_score: {type: number}
+    GraphEdge:
+      type: object
+      properties:
+        edge_id: {type: string, format: uuid}
+        source_node_id: {type: string, format: uuid}
+        target_node_id: {type: string, format: uuid}
+        relationship: {type: string, enum: [MemberOf, AdministrativeAccess, Delegation, AuthenticationRisk, RemoteAccess, PrivilegedAccess]}
+        properties: {type: object}
+    Subgraph:
+      type: object
+      properties:
+        nodes: {type: array, items: {$ref: '#/components/schemas/GraphNode'}}
+        edges: {type: array, items: {$ref: '#/components/schemas/GraphEdge'}}
+        truncated: {type: boolean}
+    Report:
+      type: object
+      properties:
+        report_id: {type: string, format: uuid}
+        report_type: {type: string}
+        title: {type: string}
+        formats: {type: array, items: {type: string}}
+        status: {type: string, enum: [queued, rendering, completed, failed, expired]}
+        snapshot_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        completed_at: {type: [string, 'null'], format: date-time}
+        artifacts:
+          type: array
+          items:
+            type: object
+            properties:
+              format: {type: string}
+              sha256: {type: string}
+              size_bytes: {type: integer}

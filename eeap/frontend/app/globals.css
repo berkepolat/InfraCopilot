@@ -1,0 +1,61 @@
+:root {
+  --bg: #0f1419;
+  --panel: #182029;
+  --border: #2a3542;
+  --text: #e6edf3;
+  --muted: #8b98a5;
+  --accent: #4ea1ff;
+  --critical: #ff5c5c;
+  --high: #ff9f43;
+  --medium: #f6d743;
+  --low: #5ad67d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+main { padding: 28px; max-width: 1200px; margin: 0 auto; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 28px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.card .value { font-size: 28px; font-weight: 600; margin-top: 6px; }
+.card .label { color: var(--muted); font-size: 13px; }
+
+table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+th { color: var(--muted); font-weight: 500; }
+
+.badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; color: #111; }
+.badge.Critical { background: var(--critical); }
+.badge.High { background: var(--high); }
+.badge.Medium { background: var(--medium); }
+.badge.Low, .badge.Informational { background: var(--low); }
+
+.login { max-width: 360px; margin: 12vh auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 28px; }
+.login label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+.login input { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+button { margin-top: 20px; padding: 10px 16px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+button.link { background: none; color: var(--muted); margin: 0; padding: 0; }
+button:disabled { opacity: 0.6; cursor: default; }
+h2 button { margin: 0 0 0 12px; padding: 6px 12px; font-size: 13px; vertical-align: middle; }
+.error { color: var(--critical); font-size: 14px; margin-top: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.ratings { display: flex; gap: 6px; margin-top: 8px; }
+.card .value .badge { font-size: 13px; vertical-align: middle; }
+h2 { margin-top: 32px; font-size: 18px; }

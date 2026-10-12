@@ -1,0 +1,47 @@
+# Test lab: a Samba AD domain controller seeded with configuration weaknesses for AD-001..AD-010.
+# Development and demonstration only — never include this file in production deployments.
+#
+#   ./scripts/lab-setup.sh
+#   docker compose -f docker-compose.yml -f docker-compose.lab.yml --profile app up -d --build
+#
+# The assessment worker is pointed at the lab DC over LDAPS with the read-only account
+# svc-eeap-reader and verifies the lab CA certificate.
+
+services:
+  samba-dc:
+    profiles: [app]
+    build:
+      context: ./infrastructure/lab/samba-dc
+    image: ${EEAP_REGISTRY:-eeap}/lab-samba-dc:${EEAP_VERSION:-0.1.0}
+    hostname: dc1
+    domainname: lab.eeap.local
+    restart: unless-stopped
+    environment:
+      LAB_REALM: LAB.EEAP.LOCAL
+      LAB_DOMAIN: LAB
+    secrets: [lab_ad_admin_password, ad_bind_password]
+    volumes:
+      - lab_samba:/var/lib/samba
+      - lab_tls:/export
+    networks:
+      eeap-scan:
+        aliases: [dc1.lab.eeap.local]
+
+  assessment-worker:
+    environment:
+      AD_LDAP_URL: ldaps://dc1.lab.eeap.local:636
+      AD_BASE_DN: DC=lab,DC=eeap,DC=local
+      AD_BIND_USER: svc-eeap-reader@lab.eeap.local
+      AD_TLS_CA_FILE: /run/eeap-lab-tls/ca.pem
+    volumes:
+      - lab_tls:/run/eeap-lab-tls:ro
+    depends_on:
+      samba-dc:
+        condition: service_healthy
+
+volumes:
+  lab_samba:
+  lab_tls:
+
+secrets:
+  lab_ad_admin_password: {file: ./secrets/lab_ad_admin_password}

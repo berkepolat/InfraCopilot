@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eeap.local/v1/relationship.schema.json",
+  "title": "EEAP Relationship Observation",
+  "description": "Graph-ready relationship fact emitted by collectors and import adapters. Minimal form: {source, relationship, target}.",
+  "type": "object",
+  "required": ["source", "relationship", "target"],
+  "properties": {
+    "source":       {"type": "string", "description": "Display name or node_key of the source node."},
+    "relationship": {"enum": ["MemberOf", "AdministrativeAccess", "Delegation", "AuthenticationRisk", "RemoteAccess", "PrivilegedAccess"]},
+    "target":       {"type": "string", "description": "Display name or node_key of the target node."},
+    "source_node":  {"$ref": "#/$defs/node"},
+    "target_node":  {"$ref": "#/$defs/node"},
+    "properties":   {"type": "object"},
+    "origin":       {"enum": ["collector", "import", "derived"], "default": "collector"},
+    "evidence_finding_id": {"type": ["string", "null"], "format": "uuid"},
+    "observed_run_id":     {"type": ["string", "null"], "format": "uuid"},
+    "observed_at":         {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["node_key", "node_type", "display_name"],
+      "properties": {
+        "node_key":      {"type": "string", "examples": ["ad:S-1-5-21-1004336348-1177238915-682003330-1105", "asset:SRV001"]},
+        "node_type":     {"enum": ["User", "Computer", "Group", "ServiceAccount", "Tier0Asset"]},
+        "display_name":  {"type": "string"},
+        "asset_id":      {"type": ["string", "null"]},
+        "domain":        {"type": ["string", "null"]},
+        "is_tier0":      {"type": "boolean", "default": false},
+        "is_privileged": {"type": "boolean", "default": false},
+        "enabled":       {"type": ["boolean", "null"]},
+        "properties":    {"type": "object"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {"source": "USER01", "relationship": "AdministrativeAccess", "target": "SQLSERVER01"}
+  ]
+}

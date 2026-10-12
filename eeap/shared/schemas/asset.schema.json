@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.eeap.local/v1/asset.schema.json",
+  "title": "EEAP Asset",
+  "type": "object",
+  "required": ["asset_id", "hostname", "asset_type", "criticality", "environment"],
+  "properties": {
+    "asset_id":     {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "hostname":     {"type": "string", "minLength": 1, "maxLength": 255},
+    "fqdn":         {"type": ["string", "null"], "maxLength": 255},
+    "asset_type":   {"enum": ["Server", "Workstation", "DomainController", "NetworkDevice", "Database", "Application", "CloudResource", "Identity", "Other"]},
+    "criticality":  {"enum": ["Critical", "High", "Medium", "Low"]},
+    "criticality_locked": {"type": "boolean", "default": false},
+    "tier":         {"enum": ["Tier0", "Tier1", "Tier2", "Unclassified"], "default": "Unclassified"},
+    "owner":        {"type": ["string", "null"], "description": "Owner team name (resolved to owner_id by the Asset Service)."},
+    "owner_id":     {"type": ["string", "null"], "format": "uuid"},
+    "environment":  {"enum": ["Production", "Staging", "Test", "Development", "DR"]},
+    "os_family":    {"enum": ["Windows", "Linux", "macOS", "NetworkOS", "Other", null]},
+    "os_version":   {"type": ["string", "null"]},
+    "domain":       {"type": ["string", "null"]},
+    "status":       {"enum": ["active", "discovered", "retired"], "default": "active"},
+    "tags":         {"type": "array", "items": {"type": "string", "maxLength": 64}, "maxItems": 50},
+    "identifiers":  {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id_type", "value"],
+        "properties": {
+          "id_type": {"enum": ["ip", "mac", "fqdn", "hostname", "ad_object_sid", "ad_object_guid", "ad_dn", "cloud_resource_id", "serial", "agent_id"]},
+          "value":   {"type": "string"}
+        }
+      }
+    },
+    "attributes":    {"type": "object"},
+    "first_seen_at": {"type": "string", "format": "date-time"},
+    "last_seen_at":  {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "asset_id": "SRV001",
+      "hostname": "SQL01",
+      "asset_type": "Server",
+      "criticality": "High",
+      "owner": "Database Team",
+      "environment": "Production"
+    }
+  ]
+}

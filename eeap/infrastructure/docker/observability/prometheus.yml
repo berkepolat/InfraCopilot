@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: eeap-services
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: [api-gateway, asset-service, assessment-service, relationship-engine, ai-engine, reporting-service]
+        type: A
+        port: 8000
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service
+
+  - job_name: eeap-workers
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: [assessment-worker, relationship-worker, ai-worker, reporting-worker]
+        type: A
+        port: 9100
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service
+
+  - job_name: minio
+    metrics_path: /minio/v2/metrics/cluster
+    static_configs:
+      - targets: ["minio:9000"]
