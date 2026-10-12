@@ -1,6 +1,7 @@
 """Reconciles discovery.asset_observed events into the inventory and applies classification rules."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 from datetime import datetime
@@ -56,6 +57,16 @@ async def _load_rules(conn: AsyncConnection) -> list[dict]:
     return [dict(r) for r in rows.mappings()]
 
 
+def _placeholder_name(name: str | None, asset_id: str) -> bool:
+    if not name or name == asset_id:
+        return True
+    try:
+        ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return True
+
+
 async def reconcile(conn: AsyncConnection, data: dict, observed_at: datetime) -> tuple[dict | None, dict]:
     """Creates or refreshes the observed asset. Returns (before, after)."""
     asset_id = data["asset_id"]
@@ -73,8 +84,12 @@ async def reconcile(conn: AsyncConnection, data: dict, observed_at: datetime) ->
             values)
     else:
         # Discovery fills gaps and refreshes OS data; it never overrides manually classified asset types.
+        # A placeholder name (the IP or asset id) is replaced once a host reports its real name.
+        values["hostname"] = (data["hostname"] if _placeholder_name(before["hostname"], asset_id)
+                              and data.get("hostname") and not _placeholder_name(data["hostname"], asset_id)
+                              else before["hostname"])
         await conn.execute(text(
-            "UPDATE asset.assets SET last_seen_at = greatest(last_seen_at, :observed), "
+            "UPDATE asset.assets SET last_seen_at = greatest(last_seen_at, :observed), hostname = :hostname, "
             "fqdn = coalesce(fqdn, :fqdn), domain = coalesce(domain, :domain), "
             "os_family = coalesce(:os_family, os_family), os_version = coalesce(:os_version, os_version), "
             "asset_type = CASE WHEN classification_source = 'manual' THEN asset_type ELSE :asset_type END, "

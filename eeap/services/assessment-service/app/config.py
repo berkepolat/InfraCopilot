@@ -31,6 +31,15 @@ class WinrmTarget:
     kdc: str | None
 
 
+@dataclass(frozen=True)
+class LinuxSshTarget:
+    username: str
+    private_key: str
+    port: int
+    known_hosts_file: str | None
+    timeout_seconds: int
+
+
 class AssessmentSettings(ServiceSettings):
     service_name: str = "assessment-service"
     evidence_bucket: str = "eeap-evidence"
@@ -70,6 +79,17 @@ class AssessmentSettings(ServiceSettings):
     # Comma-separated names (wildcards allowed) or SIDs expected in local Administrators (WIN-007).
     win_local_admins_allowed: str = ""
 
+    # Read-only Linux posture over SSH through a forced command (docs/architecture/18).
+    linux_ssh_username: str | None = None
+    linux_ssh_key_file: str | None = None
+    linux_ssh_port: int = 22
+    # OpenSSH known_hosts file; when unset, host keys are pinned on first use (assessment.ssh_host_keys).
+    linux_ssh_known_hosts_file: str | None = None
+    linux_ssh_timeout_seconds: int = 30
+    linux_ssh_concurrency: int = 16
+    # Comma-separated user names (wildcards allowed) expected in the sudo / wheel / admin groups (LIN-003).
+    linux_admins_allowed: str = ""
+
     def minio_secret_key(self) -> str:
         return read_secret_file(self.minio_secret_key_file) or ""
 
@@ -101,6 +121,21 @@ class AssessmentSettings(ServiceSettings):
 
     def local_admins_allowed(self) -> list[str]:
         return [p.strip() for p in self.win_local_admins_allowed.split(",") if p.strip()]
+
+    def linux_configured(self) -> bool:
+        """Whether Linux SSH collection is set up (the key is only mounted on workers)."""
+        return bool(self.linux_ssh_username)
+
+    def linux_target(self) -> LinuxSshTarget | None:
+        key = read_secret_file(self.linux_ssh_key_file) if self.linux_ssh_key_file else None
+        if not (self.linux_ssh_username and key):
+            return None
+        return LinuxSshTarget(username=self.linux_ssh_username, private_key=key + "\n", port=self.linux_ssh_port,
+                              known_hosts_file=self.linux_ssh_known_hosts_file or None,
+                              timeout_seconds=self.linux_ssh_timeout_seconds)
+
+    def linux_admins(self) -> list[str]:
+        return [p.strip() for p in self.linux_admins_allowed.split(",") if p.strip()]
 
 
 settings = AssessmentSettings()

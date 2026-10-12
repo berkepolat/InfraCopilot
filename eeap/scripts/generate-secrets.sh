@@ -54,6 +54,22 @@ write_secret grafana_admin_password  "$(rand 24)"
 # Password of the WinRM/JEA scanner account; empty until credentialed Windows collection is configured.
 [[ -f "$DIR/winrm_password" ]] || write_secret winrm_password ""
 
+# SSH key of the Linux posture scanner; install linux_ssh_key.pub on targets with
+# infrastructure/linux/install-eeap-posture.sh.
+if [[ ! -s "$DIR/linux_ssh_key" || "$FORCE" == true ]]; then
+  if command -v ssh-keygen >/dev/null; then
+    rm -f "$DIR/linux_ssh_key" "$DIR/linux_ssh_key.pub"
+    ssh-keygen -q -t ed25519 -N "" -C "eeap-scanner" -f "$DIR/linux_ssh_key"
+    chmod 644 "$DIR/linux_ssh_key" "$DIR/linux_ssh_key.pub"
+    echo "created  linux_ssh_key / linux_ssh_key.pub"
+  else
+    [[ -f "$DIR/linux_ssh_key" ]] || write_secret linux_ssh_key ""
+    echo "skipped  linux_ssh_key (ssh-keygen not found)"
+  fi
+else
+  echo "keep     linux_ssh_key"
+fi
+
 gen_keypair() {
   local priv="$1" pub="$2"; shift 2
   if [[ -f "$DIR/$priv" && "$FORCE" != true ]]; then

@@ -49,6 +49,7 @@ ROUTES: tuple[Route, ...] = (
           overrides=(_o("POST", r"/findings/[^/]+/risk-acceptance", "findings:accept_risk"),
                      _o("GET", r"/findings/[^/]+/evidence", "evidence:read"))),
     Route("/network-services", "assessment", {"GET": "assets:read"}),
+    Route("/ssh-host-keys", "assessment", {"GET": "assets:read", "DELETE": "assessments:manage"}),
     Route("/integrations", "assessment", {m: "integrations:manage" for m in ("GET", "POST", "PATCH", "DELETE")}),
     Route("/imports", "assessment", {"GET": "imports:create", "POST": "imports:create"},
           max_body_bytes=50 * 1024 * 1024),

@@ -24,6 +24,9 @@ identification (open ports, product/version, TLS, RDP NLA) into a network servic
 Windows hosts are checked without credentials for SMB signing, SMBv1, RDP NLA and WinRM HTTP, and,
 when WinRM credentials are configured, for NTLM, LDAP signing / channel binding, local Administrators
 and endpoint protection through a restricted JEA endpoint ([doc 17](docs/architecture/17-windows-winrm.md)).
+Linux hosts are read over SSH with a key that is locked to one read-only posture command: sshd, updates,
+privileged access, firewall, accounts, kernel settings, file permissions and OS lifecycle
+(**LIN-001 … LIN-008**, [doc 18](docs/architecture/18-linux-ssh.md)).
 AD runs also feed the exposure graph; the Relationship Engine computes Tier-0 reachability and
 risk concentration areas, which drive the propagation factor R of the risk score
 ([doc 13](docs/architecture/13-graph-analytics.md)). Correlation rules combine open findings and
@@ -52,6 +55,7 @@ WIN-0xx remain catalogued and accept imported findings only.
 | Remediation and MITRE  | [docs/architecture/15-remediation-mitre.md](docs/architecture/15-remediation-mitre.md) |
 | Reporting              | [docs/architecture/16-reporting.md](docs/architecture/16-reporting.md) |
 | Windows over WinRM     | [docs/architecture/17-windows-winrm.md](docs/architecture/17-windows-winrm.md) |
+| Linux over SSH         | [docs/architecture/18-linux-ssh.md](docs/architecture/18-linux-ssh.md) |
 | ADRs                   | [docs/adr/](docs/adr/README.md) |
 | Docker Compose         | [docker-compose.yml](docker-compose.yml), [.env.example](.env.example) |
 
@@ -128,6 +132,11 @@ To include the credentialed Windows checks, register the `EEAP.Posture` JEA endp
 targets (`infrastructure/windows/jea/Install-EeapJea.ps1`), set `WINRM_USERNAME` and `WINRM_REALM`
 in `.env`, put the password in `secrets/winrm_password` and recreate the assessment containers
 ([doc 17](docs/architecture/17-windows-winrm.md)).
+
+For Linux hosts, install `secrets/linux_ssh_key.pub` on each target with
+`infrastructure/linux/install-eeap-posture.sh`, set `LINUX_SSH_USERNAME=eeap-scan` and recreate the
+assessment containers ([doc 18](docs/architecture/18-linux-ssh.md)). The lab already does this for
+`lab-legacy`.
 
 For development there is a Samba AD **test lab** seeded with configuration weaknesses
 (never use it outside development):

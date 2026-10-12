@@ -23,3 +23,4 @@ ADRs are immutable once accepted; changes are made by a new ADR that supersedes 
 | [0015](0015-ai-engine-event-fed-read-model.md) | AI Engine scores from an event-fed local read model | Accepted |
 | [0016](0016-delegated-report-reads.md) | Reports read data with gateway-delegated, per-upstream user tokens | Accepted |
 | [0017](0017-winrm-jea-posture-collection.md) | Credentialed Windows posture over WinRM through a JEA endpoint | Accepted |
+| [0018](0018-ssh-forced-command-posture.md) | Linux posture over SSH with a forced, read-only command | Accepted |

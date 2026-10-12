@@ -481,7 +481,8 @@ paths:
         Without `targets`, runs enabled AD controls against the configured domain over read-only LDAPS.
         With `targets` (IP list), runs enabled NET controls as read-only protocol probes against those
         addresses. Every target must fall inside `SCAN_ALLOWED_CIDRS`. AD and NET cannot be mixed in
-        one request.
+        one request. NET runs also include the WIN host controls when WinRM is configured and the
+        LIN-001 … LIN-008 controls when an SSH scanner account is configured (LINUX_SSH_USERNAME).
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody:
         required: true
@@ -524,7 +525,7 @@ paths:
                     properties:
                       ips: {type: array, items: {type: string}}
         '409': {description: Another run is still queued or running}
-        '422': {description: Invalid targets, missing SCAN_ALLOWED_CIDRS, control not enabled, or WinRM controls (WIN-003/004/005/007/009) requested without WINRM_USERNAME}
+        '422': {description: Invalid targets, missing SCAN_ALLOWED_CIDRS, control not enabled, or WinRM / Linux controls requested without WINRM_USERNAME / LINUX_SSH_USERNAME}
   /assessments/runs/{run_id}:
     get:
       tags: [Assessments]
@@ -576,6 +577,46 @@ paths:
       responses:
         '200': {description: Updated}
 
+  /ssh-host-keys:
+    get:
+      tags: [Assessments]
+      x-permission: assets:read
+      summary: SSH host keys pinned on first use by the Linux posture collector
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000, default: 500}}
+      responses:
+        '200':
+          description: Pinned keys ordered by IP and port
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: {type: integer}
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ip: {type: string}
+                        port: {type: integer}
+                        key_type: {type: string, example: ssh-ed25519}
+                        fingerprint: {type: string, example: 'SHA256:ObQdbgzc+vaq/JzjdsfNt+2AHLRxtR2rkuwiNEGPKlQ'}
+                        first_seen_at: {type: string, format: date-time}
+                        last_seen_at: {type: string, format: date-time}
+                        last_seen_run_id: {type: string, format: uuid, nullable: true}
+  /ssh-host-keys/{ip}:
+    delete:
+      tags: [Assessments]
+      x-permission: assessments:manage
+      summary: Forget a pinned SSH host key after a verified re-key; the next run pins the new key
+      parameters:
+        - {name: ip, in: path, required: true, schema: {type: string}}
+        - {name: port, in: query, schema: {type: integer, minimum: 1, maximum: 65535, default: 22}}
+      responses:
+        '204': {description: Pin removed}
+        '404': {description: No pinned key for this address}
+        '422': {description: Not an IP address}
   /network-services:
     get:
       tags: [Assessments]

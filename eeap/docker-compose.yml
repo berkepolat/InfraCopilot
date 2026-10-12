@@ -383,6 +383,8 @@ services:
       SCAN_ALLOWED_CIDRS: ${SCAN_ALLOWED_CIDRS:-}
       # Credentialed Windows posture over WinRM/JEA (docs/architecture/17). Empty = not configured.
       WINRM_USERNAME: ${WINRM_USERNAME:-}
+      # Read-only Linux posture over SSH (docs/architecture/18). Empty = not configured.
+      LINUX_SSH_USERNAME: ${LINUX_SSH_USERNAME:-}
     secrets: &assessment-secrets
       - db_password_assessment
       - redis_password
@@ -423,6 +425,10 @@ services:
       WINRM_REALM: ${WINRM_REALM:-}
       WINRM_KDC: ${WINRM_KDC:-}
       WIN_LOCAL_ADMINS_ALLOWED: ${WIN_LOCAL_ADMINS_ALLOWED:-}
+      LINUX_SSH_KEY_FILE: /run/secrets/linux_ssh_key
+      LINUX_SSH_PORT: ${LINUX_SSH_PORT:-22}
+      LINUX_SSH_KNOWN_HOSTS_FILE: ${LINUX_SSH_KNOWN_HOSTS_FILE:-}
+      LINUX_ADMINS_ALLOWED: ${LINUX_ADMINS_ALLOWED:-}
     secrets:
       - db_password_assessment
       - redis_password
@@ -431,6 +437,7 @@ services:
       - minio_secret_assessment
       - ad_bind_password
       - winrm_password
+      - linux_ssh_key
     depends_on:
       assessment-service:
         condition: service_healthy
@@ -747,4 +754,5 @@ secrets:
   llm_api_key:                 {file: ./secrets/llm_api_key}
   ad_bind_password:            {file: ./secrets/ad_bind_password}
   winrm_password:              {file: ./secrets/winrm_password}
+  linux_ssh_key:               {file: ./secrets/linux_ssh_key}
   grafana_admin_password:      {file: ./secrets/grafana_admin_password}

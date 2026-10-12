@@ -15,12 +15,12 @@ from eeap_shared.utils.events import enqueue_event, mark_processed, new_envelope
 
 from .ad_relationships import build_relationships
 from .collectors.ad_ldap import AdCollectionError, collect as collect_ad
-from .collectors import port_scan, winrm_posture
+from .collectors import port_scan, ssh_posture, winrm_posture
 from .collectors.net_probes import NetCollectionError, collect_targets as collect_net
 from .config import SCHEMA, AssessmentSettings
 from .controls import ad as ad_controls
+from .controls import linux_host, win_host
 from .controls import net as net_controls
-from .controls import win_host
 from .domain import ImportRow
 from .findings_repo import ControlMeta, load_controls, upsert_observations
 from .storage import ObjectStore
@@ -231,6 +231,30 @@ async def upsert_network_services(conn: AsyncConnection, *, run_id: str, hosts: 
     return {"open": len(rows), "closed": closed}
 
 
+async def load_ssh_pins(conn: AsyncConnection, ips: list[str], port: int) -> dict[str, dict]:
+    rows = (await conn.execute(text(
+        "SELECT host(ip) AS ip, key_type, fingerprint FROM assessment.ssh_host_keys "
+        "WHERE port = :port AND host(ip) = ANY(:ips)"), {"port": port, "ips": ips})).mappings().all()
+    return {r["ip"]: {"key_type": r["key_type"], "fingerprint": r["fingerprint"]} for r in rows}
+
+
+async def record_ssh_host_keys(conn: AsyncConnection, *, run_id: str, port: int, hosts: dict[str, dict],
+                               observed_at: datetime) -> int:
+    """Pins keys seen for the first time (trust on first use) and refreshes last_seen of matching pins."""
+    rows = [{"ip": ip, "port": port, "type": r["host_key"]["key_type"], "fp": r["host_key"]["fingerprint"],
+             "at": observed_at, "run": run_id}
+            for ip, r in hosts.items() if r["status"] == "ok" and r["host_key"]["trust"] != "known_hosts"]
+    if not rows:
+        return 0
+    await conn.execute(text(
+        "INSERT INTO assessment.ssh_host_keys (ip, port, key_type, fingerprint, first_seen_at, last_seen_at, "
+        "first_seen_run_id, last_seen_run_id) VALUES (CAST(:ip AS inet), :port, :type, :fp, :at, :at, "
+        "CAST(:run AS uuid), CAST(:run AS uuid)) ON CONFLICT (ip, port) DO UPDATE SET "
+        "last_seen_at = EXCLUDED.last_seen_at, last_seen_run_id = EXCLUDED.last_seen_run_id "
+        "WHERE ssh_host_keys.fingerprint = EXCLUDED.fingerprint"), rows)
+    return sum(1 for ip in hosts if hosts[ip]["status"] == "ok" and hosts[ip]["host_key"]["trust"] == "first-use")
+
+
 async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: AssessmentSettings, run_id: str,
                        requested: list[str] | None, ips: list[str], envelope: dict,
                        extra_ports: list[int] | None = None) -> None:
@@ -239,7 +263,7 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
     async with engine.connect() as conn:
         enabled = set((await conn.execute(text(
             "SELECT control_id FROM assessment.controls WHERE enabled AND execution_site = 'server' "
-            "AND module IN ('NET', 'WIN')"))).scalars())
+            "AND module IN ('NET', 'WIN', 'LINUX')"))).scalars())
     control_ids = [c for c in net_controls.NETWORK_RUN_CONTROLS
                    if c in enabled and (requested is None or c in requested)]
     if not control_ids:
@@ -257,8 +281,20 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
     if winrm_target and any(c in win_host.WINRM_CONTROLS for c in control_ids):
         windows_hosts = await asyncio.to_thread(
             winrm_posture.collect_hosts, ips, winrm_target, concurrency=settings.winrm_concurrency)
-    probe_controls = [c for c in control_ids
-                      if c not in net_controls.PORT_SCAN_CONTROLS and c not in win_host.WINRM_CONTROLS]
+    linux_hosts: dict[str, dict] = {}
+    linux_target = settings.linux_target()
+    if linux_target and any(c in linux_host.LINUX_CONTROLS for c in control_ids):
+        # When the port scan covered the SSH port, only hosts where it is open are contacted.
+        ssh_ips = [ip for ip in ips if not port_hosts or linux_target.port not in scanned_ports
+                   or any(s["port"] == linux_target.port for s in port_hosts[ip]["open"])]
+        pins = {}
+        if ssh_ips and not linux_target.known_hosts_file:
+            async with engine.connect() as conn:
+                pins = await load_ssh_pins(conn, ssh_ips, linux_target.port)
+        linux_hosts = await asyncio.to_thread(
+            ssh_posture.collect_hosts, ssh_ips, linux_target, pins, concurrency=settings.linux_ssh_concurrency)
+    probe_controls = [c for c in control_ids if c not in net_controls.PORT_SCAN_CONTROLS
+                      and c not in win_host.WINRM_CONTROLS and c not in linux_host.LINUX_CONTROLS]
     snapshot = await asyncio.to_thread(
         collect_net, ips, control_ids=probe_controls, timeout=settings.net_probe_timeout_seconds)
     snapshot["control_ids"] = control_ids
@@ -270,9 +306,12 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
             host["probes"]["ports"] = port_hosts[host["ip"]]
         if windows_hosts:
             host["probes"]["windows"] = windows_hosts[host["ip"]]
+        if host["ip"] in linux_hosts:
+            host["probes"]["linux"] = linux_hosts[host["ip"]]
     observed_at = datetime.fromisoformat(snapshot["collected_at"])
     evaluation = net_controls.evaluate(snapshot, control_ids, observed_at,
-                                       local_admins_allowed=settings.local_admins_allowed())
+                                       local_admins_allowed=settings.local_admins_allowed(),
+                                       linux_admins_allowed=settings.linux_admins())
 
     body = json.dumps(snapshot, sort_keys=True).encode()
     sha256 = hashlib.sha256(body).hexdigest()
@@ -319,6 +358,13 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
             failures = {ip: f"{r['stage']}: {r['error']}"[:200] for ip, r in windows_hosts.items()
                         if r["status"] != "ok"}
             stats.update(winrm_assessed=len(windows_hosts) - len(failures), winrm_failed=failures)
+        if linux_target and any(c in linux_host.LINUX_CONTROLS for c in control_ids):
+            failures = {ip: f"{r['stage']}: {r['error']}"[:200] for ip, r in linux_hosts.items()
+                        if r["status"] != "ok"}
+            pinned = await record_ssh_host_keys(conn, run_id=run_id, port=linux_target.port, hosts=linux_hosts,
+                                                observed_at=observed_at)
+            stats.update(ssh_assessed=len(linux_hosts) - len(failures), ssh_failed=failures,
+                         ssh_skipped=len(ips) - len(linux_hosts), ssh_host_keys_pinned=pinned)
         await _finish(engine, settings, run_id, "partially_completed" if rejected else "completed", stats,
                       envelope, conn=conn, full_scope=False)
     logger.info("NET assessment run completed", extra={"run_id": run_id, "targets": len(ips),

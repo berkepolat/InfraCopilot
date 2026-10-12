@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ from eeap_shared.utils.pagination import decode_cursor, page
 from eeap_shared.utils.service import get_engine
 
 from .config import SCHEMA, settings
+from .controls.linux_host import LINUX_CONTROLS
 from .controls.win_host import WINRM_CONTROLS
 from .domain import CONTENT_TYPES, RISK_ACCEPTABLE_FROM, LifecycleState, SourceType, check_triage_transition
 from .findings_repo import FINDING_COLUMNS, get_finding, load_controls, set_lifecycle
@@ -106,25 +108,27 @@ async def start_run(payload: RunRequest, principal: Principal = Depends(require_
         raise HTTPException(422, detail=f"targets x ports exceeds {MAX_CONNECTIONS_PER_RUN} connections per run")
 
     async with engine.begin() as conn:
-        # Network runs also evaluate the WIN controls observable on the wire (execution_site 'server').
-        modules = ["NET", "WIN"] if module == "NET" else [module]
+        # Network runs also evaluate the server-executed WIN and LINUX host controls.
+        modules = ["NET", "WIN", "LINUX"] if module == "NET" else [module]
         enabled = set((await conn.execute(text(
             "SELECT control_id FROM assessment.controls WHERE enabled AND execution_site = 'server' "
             "AND module = ANY(:modules)"), {"modules": modules})).scalars())
-        winrm_controls = set(WINRM_CONTROLS) if module == "NET" and not settings.winrm_configured() else set()
-        requested = payload.control_ids or sorted(enabled - winrm_controls)
-        if needs_winrm := sorted(set(requested) & winrm_controls):
-            raise HTTPException(422, detail=f"{', '.join(needs_winrm)} need WinRM credentials (WINRM_USERNAME), "
-                                            "which are not configured")
+        unconfigured: dict[str, str] = {}
+        if module == "NET" and not settings.winrm_configured():
+            unconfigured |= dict.fromkeys(WINRM_CONTROLS, "WinRM credentials (WINRM_USERNAME)")
+        if module == "NET" and not settings.linux_configured():
+            unconfigured |= dict.fromkeys(LINUX_CONTROLS, "an SSH scanner account (LINUX_SSH_USERNAME)")
+        requested = payload.control_ids or sorted(enabled - set(unconfigured))
+        if blocked := sorted(set(requested) & set(unconfigured)):
+            needs = sorted({unconfigured[c] for c in blocked})
+            raise HTTPException(422, detail=f"{', '.join(blocked)} need {' and '.join(needs)}, "
+                                            "which is not configured")
+        # Only controls of this run's modules are enabled here, so this also rejects mixing AD and NET.
         unknown = sorted(set(requested) - enabled)
         if unknown:
             raise HTTPException(422, detail=f"not an enabled {module} control: {', '.join(unknown)}")
         if not requested:
             raise HTTPException(422, detail=f"no {module} controls are enabled")
-        # Reject mixing modules in one run.
-        prefixes = {c.split("-", 1)[0] for c in requested}
-        if not prefixes <= set(modules):
-            raise HTTPException(422, detail=f"control_ids must all belong to module {module} for this request")
         busy = (await conn.execute(text(
             "SELECT run_id::text FROM assessment.assessment_runs WHERE trigger IN ('manual', 'api', 'schedule') "
             "AND status IN ('queued', 'running') AND created_at > now() - interval '1 hour' LIMIT 1"))).scalar()
@@ -259,6 +263,37 @@ async def list_network_services(
     async with engine.connect() as conn:
         items = [dict(r) for r in (await conn.execute(text(sql), params)).mappings()]
     return {"items": items, "count": len(items)}
+
+
+# ----------------------------------------------------------------------------------- SSH host keys
+
+@router.get("/ssh-host-keys")
+async def list_ssh_host_keys(limit: int = Query(500, ge=1, le=5000),
+                             _: Principal = Depends(require_permission("assets:read")),
+                             engine: AsyncEngine = Depends(get_engine)):
+    async with engine.connect() as conn:
+        rows = await conn.execute(text(
+            "SELECT host(ip) AS ip, port, key_type, fingerprint, first_seen_at, last_seen_at, last_seen_run_id "
+            "FROM assessment.ssh_host_keys ORDER BY ip, port LIMIT :limit"), {"limit": limit})
+        items = [dict(r) for r in rows.mappings()]
+    return {"items": items, "count": len(items)}
+
+
+@router.delete("/ssh-host-keys/{ip}", status_code=204)
+async def forget_ssh_host_key(ip: str, port: int = Query(22, ge=1, le=65535),
+                              _: Principal = Depends(require_permission("assessments:manage")),
+                              engine: AsyncEngine = Depends(get_engine)):
+    """Forgets a pinned host key after a legitimate re-key; the next run pins the new key."""
+    try:
+        address = str(ipaddress.ip_address(ip))
+    except ValueError as exc:
+        raise HTTPException(422, detail="ip must be an IP address") from exc
+    async with engine.begin() as conn:
+        deleted = (await conn.execute(text(
+            "DELETE FROM assessment.ssh_host_keys WHERE ip = CAST(:ip AS inet) AND port = :port"),
+            {"ip": address, "port": port})).rowcount
+    if not deleted:
+        raise HTTPException(404, detail="no pinned host key for this address")
 
 
 # ------------------------------------------------------------------------------------------- findings

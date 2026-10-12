@@ -28,3 +28,10 @@ def test_first_matching_rule_wins_per_field():
     assert discovery.classify(RULES, {"asset_type": "Database", "environment": "Production", "tags": []}) == \
         {"criticality": "High", "tier": "Tier1"}
     assert discovery.classify(RULES, {"asset_type": "Workstation", "tags": []}) == {}
+
+
+def test_placeholder_host_names():
+    assert discovery._placeholder_name("172.20.0.2", "ip:172.20.0.2")
+    assert discovery._placeholder_name("ip:172.20.0.2", "ip:172.20.0.2")
+    assert discovery._placeholder_name(None, "ip:172.20.0.2")
+    assert not discovery._placeholder_name("legacy1", "ip:172.20.0.2")

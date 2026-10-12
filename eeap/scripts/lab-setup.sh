@@ -19,5 +19,14 @@ for name in lab_ad_admin_password ad_bind_password; do
   fi
 done
 
+if [[ -s "$DIR/linux_ssh_key" && -s "$DIR/linux_ssh_key.pub" ]]; then
+  echo "keep     linux_ssh_key"
+else
+  rm -f "$DIR/linux_ssh_key" "$DIR/linux_ssh_key.pub"
+  ssh-keygen -q -t ed25519 -N "" -C "eeap-scanner" -f "$DIR/linux_ssh_key"
+  chmod 644 "$DIR/linux_ssh_key" "$DIR/linux_ssh_key.pub"
+  echo "created  linux_ssh_key / linux_ssh_key.pub"
+fi
+
 echo "Lab secrets ready. Start with:"
 echo "  docker compose -f docker-compose.yml -f docker-compose.lab.yml --profile app up -d --build"

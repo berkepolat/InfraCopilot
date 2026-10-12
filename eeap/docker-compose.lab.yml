@@ -1,5 +1,6 @@
 # Test lab: a Samba AD domain controller seeded with configuration weaknesses for AD-001..AD-010,
-# plus deliberately exposed network targets (lab-legacy, lab-redis, lab-etcd) for NET-006..009.
+# plus deliberately exposed network targets (lab-legacy, lab-redis, lab-etcd) for NET-006..009 and a
+# Linux posture target (lab-legacy, LIN-001..008, scanner key from secrets/linux_ssh_key).
 # Development and demonstration only — never include this file in production deployments.
 #
 #   ./scripts/lab-setup.sh
@@ -29,13 +30,16 @@ services:
         aliases: [dc1.lab.eeap.local]
 
   # Deliberately exposed NET targets (port discovery demo, NET-006..009). Reachable only on eeap-scan.
+  # Also a Linux posture target (LIN-001..008) reachable with the scanner key only.
   lab-legacy:
     profiles: [app]
     build:
-      context: ./infrastructure/lab/legacy-host
+      context: ./infrastructure
+      dockerfile: lab/legacy-host/Dockerfile
     image: ${EEAP_REGISTRY:-eeap}/lab-legacy-host:${EEAP_VERSION:-0.1.0}
     hostname: legacy1
     restart: unless-stopped
+    secrets: [linux_ssh_key_pub]
     networks:
       eeap-scan:
         aliases: [legacy1.lab.eeap.local]
@@ -61,8 +65,13 @@ services:
       eeap-scan:
         aliases: [etcd1.lab.eeap.local]
 
+  assessment-service:
+    environment:
+      LINUX_SSH_USERNAME: eeap-scan
+
   assessment-worker:
     environment:
+      LINUX_SSH_USERNAME: eeap-scan
       AD_LDAP_URL: ldaps://dc1.lab.eeap.local:636
       AD_BASE_DN: DC=lab,DC=eeap,DC=local
       AD_BIND_USER: svc-eeap-reader@lab.eeap.local
@@ -79,3 +88,4 @@ volumes:
 
 secrets:
   lab_ad_admin_password: {file: ./secrets/lab_ad_admin_password}
+  linux_ssh_key_pub: {file: ./secrets/linux_ssh_key.pub}

@@ -64,7 +64,8 @@ Network runs also evaluate the WIN controls whose configuration is visible on th
 (`execution_site = server`, migration `assessment_0005`). Hosts that do not expose the service get
 no observation (not applicable). The remaining WIN controls (WIN-003, 004, 005, 007, 009) need host
 access; they are collected over WinRM through a JEA endpoint when credentials are configured
-([doc 17](17-windows-winrm.md)).
+([doc 17](17-windows-winrm.md)). Linux hosts are assessed over SSH with a forced read-only command
+(LIN-001 … LIN-008, [doc 18](18-linux-ssh.md)).
 
 | Control | Probe | FAIL / PASS |
 |---|---|---|
