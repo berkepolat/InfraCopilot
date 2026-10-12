@@ -805,16 +805,55 @@ paths:
     get:
       tags: [Risk]
       x-permission: risk:read
-      parameters: [{name: status, in: query, schema: {type: string, enum: [active, mitigated, dismissed]}}]
+      parameters:
+        - {name: status, in: query, schema: {type: string, enum: [active, mitigated, dismissed], default: active}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
       responses:
-        '200': {description: Correlated exposure scenarios, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/RiskScenario'}}}}}
+        '200': {description: Correlated exposure scenarios, highest score first, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/RiskScenario'}}}}}
   /risk/scenarios/{scenario_id}:
     get:
       tags: [Risk]
       x-permission: risk:read
       parameters: [{name: scenario_id, in: path, required: true, schema: {type: string, format: uuid}}]
       responses:
-        '200': {description: Scenario with stages, findings, remediation, narrative}
+        '200':
+          description: Scenario with stages and the supporting findings
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/RiskScenario'}
+                  - type: object
+                    properties:
+                      findings:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            finding_id: {type: string, format: uuid}
+                            stage_order: {type: integer}
+                            control_id: {type: string}
+                            asset_id: {type: string}
+                            subject_key: {type: string}
+                            severity: {type: string}
+                            status: {type: string}
+                            lifecycle_state: {type: string}
+                            score: {type: integer}
+        '404': {description: Unknown scenario}
+    patch:
+      tags: [Risk]
+      x-permission: risk:manage
+      summary: Dismiss a scenario or make it active again (mitigated scenarios are managed by correlation)
+      parameters: [{name: scenario_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [status], properties: {status: {type: string, enum: [active, dismissed]}}}
+      responses:
+        '200': {description: Updated scenario}
+        '404': {description: Unknown scenario}
+        '409': {description: Scenario is mitigated}
   /risk/mitre:
     get:
       tags: [Risk]
@@ -1173,10 +1212,12 @@ components:
       properties:
         scenario_id: {type: string, format: uuid}
         rule_id: {type: string}
+        scope_key: {type: string, description: '"organization" or "subject:<lower-cased subject key>"'}
         title: {type: string}
         summary: {type: string}
         score: {type: integer}
         rating: {type: string}
+        factors: {type: [object, 'null']}
         stages:
           type: array
           items:
@@ -1184,9 +1225,14 @@ components:
             properties:
               order: {type: integer}
               name: {type: string}
+              matched: {type: boolean}
+              derived: {type: boolean}
               finding_ids: {type: array, items: {type: string, format: uuid}}
+              graph: {type: object, description: Graph fact that satisfied a graph-only stage}
         affected_asset_ids: {type: array, items: {type: string}}
-        status: {type: string}
+        status: {type: string, enum: [active, mitigated, dismissed]}
+        first_detected_at: {type: string, format: date-time}
+        last_evaluated_at: {type: string, format: date-time}
     GraphNode:
       type: object
       properties:

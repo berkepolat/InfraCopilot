@@ -22,7 +22,8 @@ assessment ([doc 11](docs/architecture/11-ad-assessment.md)). **NET-001 … NET-
 explicit IP list authorized by `SCAN_ALLOWED_CIDRS` ([doc 12](docs/architecture/12-net-assessment.md)).
 AD runs also feed the exposure graph; the Relationship Engine computes Tier-0 reachability and
 risk concentration areas, which drive the propagation factor R of the risk score
-([doc 13](docs/architecture/13-graph-analytics.md)).
+([doc 13](docs/architecture/13-graph-analytics.md)). Correlation rules combine open findings and
+graph facts into risk scenarios ([doc 14](docs/architecture/14-correlation.md)).
 WIN-0xx remain catalogued and accept imported findings only.
 
 | Deliverable            | Location                                                                 |
@@ -40,6 +41,7 @@ WIN-0xx remain catalogued and accept imported findings only.
 | AD assessment          | [docs/architecture/11-ad-assessment.md](docs/architecture/11-ad-assessment.md) |
 | NET IP assessment      | [docs/architecture/12-net-assessment.md](docs/architecture/12-net-assessment.md) |
 | Graph analytics        | [docs/architecture/13-graph-analytics.md](docs/architecture/13-graph-analytics.md) |
+| Correlation            | [docs/architecture/14-correlation.md](docs/architecture/14-correlation.md) |
 | ADRs                   | [docs/adr/](docs/adr/README.md) |
 | Docker Compose         | [docker-compose.yml](docker-compose.yml), [.env.example](.env.example) |
 

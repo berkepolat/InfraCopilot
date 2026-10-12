@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from eeap_shared.utils.events import enqueue_event, new_envelope
 
 from .config import SCHEMA, settings
+from .scenarios import correlate
 from .scoring import AssetScore, FindingInputs, ScoreResult, ScoringModel, score_asset, score_finding, \
     score_organization
 
@@ -143,6 +144,7 @@ class RecomputeStats:
     findings: int = 0
     assets: int = 0
     organization: int | None = None
+    scenarios: int | None = None
     changed: dict[str, int] = field(default_factory=dict)
 
 
@@ -223,6 +225,17 @@ async def _recompute(engine: AsyncEngine, controls: list[str], assets: list[str]
             stats.assets = len(asset_results)
             stats.changed["asset"] = await store_scores(conn, "asset", asset_results, model, trigger)
             org_dirty = org_dirty or bool(stats.changed["asset"])
+
+        if full or org_dirty or stats.changed.get("finding"):
+            correlation = await correlate(conn, model, GATING_STATUS, GATING_LIFECYCLE)
+            stats.scenarios = correlation.active
+            stats.changed["scenario"] = correlation.scores_changed
+            org_dirty = True
+            if correlation.new or correlation.mitigated:
+                await enqueue_event(conn, SCHEMA, "eeap.risk", new_envelope(
+                    event_type="correlation.completed", source=settings.service_name, subject="org",
+                    data={"active": correlation.active, "new": correlation.new,
+                          "mitigated": correlation.mitigated, "trigger": trigger}))
 
         if org_dirty:
             rows = await conn.execute(text("""

@@ -126,6 +126,26 @@ export default async function Dashboard() {
           </table>
         )}
 
+        <h2>Risk scenarios{risk ? ` (${risk.active_scenarios} active)` : ""}</h2>
+        {risk === null ? <p className="muted">You do not have permission to view risk scenarios.</p> : (
+          <table>
+            <thead><tr><th>Score</th><th>Scenario</th><th>Chain</th><th>Assets</th></tr></thead>
+            <tbody>
+              {(risk.top_scenarios?.length ?? 0) === 0 && <tr><td colSpan={4} className="muted">No correlated risk scenarios.</td></tr>}
+              {risk.top_scenarios?.map((s) => (
+                <tr key={s.scenario_id}>
+                  <td><span className={`badge ${s.rating}`}>{s.score}</span></td>
+                  <td>{s.title}<div className="muted small">{s.rule_id} · {s.summary}</div></td>
+                  <td className="small">
+                    {s.stages.filter((st) => st.matched).map((st) => st.name).join(" → ")}
+                  </td>
+                  <td className="muted small">{s.affected_asset_ids.join(", ") || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
         <h2>Top risks</h2>
         {topFindings === null ? <p className="muted">You do not have permission to view risk scores.</p> : (
           <table>

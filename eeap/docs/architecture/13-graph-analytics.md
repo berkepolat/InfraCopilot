@@ -101,4 +101,4 @@ The dashboard shows the latest analysis and its top concentration areas.
   collectors and will appear as further `relationship.observed` sources.
 - Resource-based constrained delegation is reported by AD-005 but not yet modelled as an edge
   (it requires reading the security descriptor of `msDS-AllowedToActOnBehalfOfOtherIdentity`).
-- Correlation rules (risk scenarios) build on these facts next.
+- Correlation rules use these facts to build risk scenarios ([doc 14](14-correlation.md)).

@@ -58,7 +58,21 @@ export type RiskSummary = {
   exposure_score: { score: number; rating: Rating; computed_at: string; factors: Record<string, unknown> } | null;
   open_by_rating: { finding: Partial<Record<Rating, number>>; asset: Partial<Record<Rating, number>> };
   active_scenarios: number;
+  top_scenarios?: RiskScenario[];
   scoring_model: string;
+};
+
+export type RiskScenario = {
+  scenario_id: string;
+  rule_id: string;
+  title: string;
+  summary: string;
+  score: number;
+  rating: Rating;
+  status: string;
+  affected_asset_ids: string[];
+  stages: { order: number; name: string; matched: boolean; finding_ids: string[]; derived?: boolean }[];
+  first_detected_at: string;
 };
 
 export type TopFinding = {
