@@ -22,6 +22,7 @@ logger = logging.getLogger("eeap.ai.engine")
 DIRTY_CONTROLS = "ai:dirty:controls"
 DIRTY_ASSETS = "ai:dirty:assets"
 DIRTY_ORG = "ai:dirty:org"
+DIRTY_FULL = "ai:dirty:full"
 GATING_LIFECYCLE = ("open", "acknowledged", "in_remediation")
 GATING_STATUS = ("FAIL", "WARNING")
 
@@ -69,9 +70,27 @@ async def upsert_asset_fact(conn: AsyncConnection, event_type: str, data: dict, 
     return result.first() is not None
 
 
+async def replace_graph_facts(conn: AsyncConnection, data: dict) -> bool:
+    """Swaps in the graph context of a completed analysis (each analysis covers the whole graph)."""
+    await conn.execute(text("DELETE FROM ai.graph_facts"))
+    facts = {(f["kind"], f["key"]): f for f in data.get("facts") or [] if f.get("kind") in ("asset", "dn")}
+    if facts:
+        await conn.execute(text(
+            "INSERT INTO ai.graph_facts (subject_kind, subject_key, propagation_score, tier0_reachable, min_hops, "
+            "is_tier0, is_privileged, analysis_id) VALUES (:kind, :key, :propagation, :reachable, :hops, :tier0, "
+            ":privileged, CAST(:analysis_id AS uuid))"),
+            [{"kind": kind, "key": key, "propagation": min(1.0, max(0.0, float(f["propagation_score"]))),
+              "reachable": bool(f["tier0_reachable"]), "hops": f.get("min_hops"), "tier0": bool(f["is_tier0"]),
+              "privileged": bool(f["is_privileged"]), "analysis_id": data["analysis_id"]}
+             for (kind, key), f in facts.items()])
+    return True
+
+
 async def mark_dirty(redis: Redis, *, controls: Iterable[str] = (), assets: Iterable[str] = (),
-                     org: bool = True) -> None:
+                     org: bool = True, full: bool = False) -> None:
     pipe = redis.pipeline()
+    if full:
+        pipe.set(DIRTY_FULL, "1")
     if controls := list(controls):
         pipe.sadd(DIRTY_CONTROLS, *controls)
     if assets := list(assets):
@@ -128,29 +147,41 @@ class RecomputeStats:
 
 
 async def _score_findings(conn: AsyncConnection, model: ScoringModel, where: str, params: dict) -> dict:
+    # A finding about a directory object (DN subject) takes that object's graph context; anything else takes
+    # its asset's. Once an analysis exists, a subject without a fact has no path to Tier 0 (R = 0).
+    graph_available = (await conn.execute(text("SELECT EXISTS (SELECT 1 FROM ai.graph_facts)"))).scalar_one()
     rows = (await conn.execute(text(f"""
         WITH breadth AS (
             SELECT control_id, count(*) AS affected FROM ai.finding_facts
             WHERE status = ANY(:gs) AND lifecycle_state = ANY(:gl) GROUP BY control_id)
         SELECT f.finding_id::text AS finding_id, f.asset_id, f.control_id, f.severity, f.status, f.lifecycle_state,
                f.exploitability::float AS exploitability, f.privilege_impact::float AS privilege_impact,
-               a.criticality, a.tier, coalesce(b.affected, 0) AS affected
+               a.criticality, a.tier, coalesce(b.affected, 0) AS affected,
+               CASE WHEN position('dc=' in lower(f.subject_key)) > 0 THEN gd.propagation_score
+                    ELSE ga.propagation_score END::float AS propagation,
+               coalesce(CASE WHEN position('dc=' in lower(f.subject_key)) > 0 THEN gd.is_tier0 OR gd.is_privileged
+                             ELSE ga.is_tier0 OR ga.is_privileged END, false) AS graph_tier0
         FROM ai.finding_facts f
         LEFT JOIN ai.asset_facts a ON a.asset_id = f.asset_id
         LEFT JOIN breadth b ON b.control_id = f.control_id
+        LEFT JOIN ai.graph_facts gd ON gd.subject_kind = 'dn' AND gd.subject_key = lower(f.subject_key)
+        LEFT JOIN ai.graph_facts ga ON ga.subject_kind = 'asset' AND ga.subject_key = f.asset_id
         WHERE {where}"""), {**params, "gs": list(GATING_STATUS), "gl": list(GATING_LIFECYCLE)})).mappings().all()
     results = {
         r["finding_id"]: score_finding(model, FindingInputs(
             severity=r["severity"], status=r["status"], lifecycle_state=r["lifecycle_state"],
             criticality=r["criticality"], exploitability=r["exploitability"],
             privilege_impact=r["privilege_impact"], affected_count=int(r["affected"]),
-            is_tier0=r["tier"] == "Tier0"))
+            propagation=(r["propagation"] or 0.0) if graph_available else None,
+            is_tier0=r["tier"] == "Tier0" or r["graph_tier0"]))
         for r in rows
     }
     return {"results": results, "assets": {r["asset_id"] for r in rows}}
 
 
 async def recompute(engine: AsyncEngine, redis: Redis, *, full: bool = False, trigger: str = "event") -> RecomputeStats:
+    if await redis.getdel(DIRTY_FULL):
+        full, trigger = True, "graph"
     controls = [] if full else list(await redis.spop(DIRTY_CONTROLS, 10_000) or [])
     assets = [] if full else list(await redis.spop(DIRTY_ASSETS, 10_000) or [])
     org_dirty = full or bool(await redis.getdel(DIRTY_ORG))
@@ -159,7 +190,7 @@ async def recompute(engine: AsyncEngine, redis: Redis, *, full: bool = False, tr
     try:
         return await _recompute(engine, controls, assets, org_dirty, full, trigger)
     except Exception:
-        await mark_dirty(redis, controls=controls, assets=assets, org=org_dirty)
+        await mark_dirty(redis, controls=controls, assets=assets, org=org_dirty, full=full)
         raise
 
 

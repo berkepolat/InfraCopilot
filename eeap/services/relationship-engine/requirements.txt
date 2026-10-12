@@ -1,1 +1,2 @@
 # Service-specific dependencies (common ones come from eeap-shared).
+networkx>=3.3,<4

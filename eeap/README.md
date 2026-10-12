@@ -20,6 +20,9 @@ transactional outbox / Redis Streams event pipeline. Findings can be imported an
 scored automatically. **AD-001 … AD-010** are implemented as a read-only LDAPS configuration
 assessment ([doc 11](docs/architecture/11-ad-assessment.md)). **NET-001 … NET-005** probe an
 explicit IP list authorized by `SCAN_ALLOWED_CIDRS` ([doc 12](docs/architecture/12-net-assessment.md)).
+AD runs also feed the exposure graph; the Relationship Engine computes Tier-0 reachability and
+risk concentration areas, which drive the propagation factor R of the risk score
+([doc 13](docs/architecture/13-graph-analytics.md)).
 WIN-0xx remain catalogued and accept imported findings only.
 
 | Deliverable            | Location                                                                 |
@@ -36,6 +39,7 @@ WIN-0xx remain catalogued and accept imported findings only.
 | Directory structure    | [docs/architecture/10-directory-structure.md](docs/architecture/10-directory-structure.md) |
 | AD assessment          | [docs/architecture/11-ad-assessment.md](docs/architecture/11-ad-assessment.md) |
 | NET IP assessment      | [docs/architecture/12-net-assessment.md](docs/architecture/12-net-assessment.md) |
+| Graph analytics        | [docs/architecture/13-graph-analytics.md](docs/architecture/13-graph-analytics.md) |
 | ADRs                   | [docs/adr/](docs/adr/README.md) |
 | Docker Compose         | [docker-compose.yml](docker-compose.yml), [.env.example](.env.example) |
 
@@ -128,6 +132,6 @@ Unit and contract tests run in a throwaway container:
 
 ```bash
 docker run --rm -v "$PWD:/src:ro" -w /tmp python:3.12-slim sh -c \
-  "cp -r /src/shared /tmp/shared && pip install -q '/tmp/shared[test]' 'argon2-cffi>=23.1,<26' 'ldap3>=2.9,<3' 'dnspython>=2.6,<3' \
+  "cp -r /src/shared /tmp/shared && pip install -q '/tmp/shared[test]' 'argon2-cffi>=23.1,<26' 'ldap3>=2.9,<3' 'dnspython>=2.6,<3' 'networkx>=3.3,<4' \
    && cd /src && python -m pytest -q -p no:cacheprovider tests"
 ```

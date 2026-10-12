@@ -90,12 +90,36 @@ export type AssessmentRun = {
     created?: number;
     updated?: number;
     resolved?: number;
+    relationships?: number;
     accepted?: number;
     rejected?: number;
     by_severity?: Record<string, number>;
   };
   created_at: string;
   completed_at: string | null;
+};
+
+export type GraphAnalysis = {
+  analysis_id: string;
+  trigger: string;
+  node_count: number;
+  edge_count: number;
+  completed_at: string;
+  exposed_nodes: number;
+  tier0_nodes: number;
+  one_hop_nodes: number;
+  areas: Record<string, number>;
+};
+
+export type ConcentrationArea = {
+  area_id: string;
+  area_type: string;
+  score: number;
+  member_count: number;
+  summary: string;
+  anchor_node_id: string;
+  anchor_node_type: string;
+  anchor_display_name: string;
 };
 
 export type Me = { user_id: string; username: string; roles: string[]; permissions: string[] };

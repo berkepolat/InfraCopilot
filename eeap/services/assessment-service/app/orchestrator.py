@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from eeap_shared.utils.events import enqueue_event, mark_processed, new_envelope
 
+from .ad_relationships import build_relationships
 from .collectors.ad_ldap import AdCollectionError, collect as collect_ad
 from .collectors.net_probes import NetCollectionError, collect_targets as collect_net
 from .config import SCHEMA, AssessmentSettings
@@ -28,6 +29,7 @@ logger = logging.getLogger("eeap.assessment.orchestrator")
 ORCHESTRATOR_GROUP = "assessment-service.orchestrator"
 ASSESSMENT_STREAM = "eeap.assessment"
 DISCOVERY_STREAM = "eeap.discovery"
+RELATIONSHIP_STREAM = "eeap.relationship"
 EVIDENCE_RETENTION_DAYS = 365
 
 
@@ -169,8 +171,14 @@ async def _execute_ad(engine: AsyncEngine, store: ObjectStore, settings: Assessm
                 correlation_id=envelope.get("correlation_id"), causation_id=envelope["event_id"],
                 data={**asset, "source": ad_controls.SOURCE_TOOL, "run_id": run_id,
                       "observed_at": observed_at.isoformat()}))
+        relationships = build_relationships(snapshot, run_id)
+        await enqueue_event(conn, SCHEMA, RELATIONSHIP_STREAM, new_envelope(
+            event_type="relationship.observed", source=settings.service_name, subject=f"ad:{domain}",
+            correlation_id=envelope.get("correlation_id"), causation_id=envelope["event_id"],
+            data={"run_id": run_id, "scope": f"ad:{domain}", "complete": True, "relationships": relationships}))
         stats = {
             "module": "AD", "domain": domain, "controls": evaluation.evaluated_controls,
+            "relationships": len(relationships),
             "objects": {"users": len(snapshot["users"]), "computers": len(snapshot["computers"]),
                         "privileged_groups": len(snapshot["privileged_groups"])},
             "observations": len(evaluation.observations), "created": outcome["created"],

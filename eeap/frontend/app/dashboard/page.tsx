@@ -4,7 +4,9 @@ import {
   gatewayFetch,
   type Asset,
   type AssessmentRun,
+  type ConcentrationArea,
   type Control,
+  type GraphAnalysis,
   type Me,
   type Page,
   type Rating,
@@ -23,7 +25,8 @@ function runSummary(run: AssessmentRun): string {
     const n = s.targets?.length ?? 0;
     return `NET · ${n} IP${n === 1 ? "" : "s"} · ${s.created} new, ${s.updated ?? 0} changed, ${s.resolved ?? 0} resolved`;
   }
-  return `${s.domain ?? "AD"} · ${s.created} new, ${s.updated ?? 0} changed, ${s.resolved ?? 0} resolved`;
+  const rels = s.relationships !== undefined ? ` · ${s.relationships} relationships` : "";
+  return `${s.domain ?? "AD"} · ${s.created} new, ${s.updated ?? 0} changed, ${s.resolved ?? 0} resolved${rels}`;
 }
 
 export const dynamic = "force-dynamic";
@@ -48,13 +51,16 @@ export default async function Dashboard() {
     throw error;
   }
 
-  const [assets, controls, risk, topFindings, runs] = await Promise.all([
+  const [assets, controls, risk, topFindings, runs, graph, areas] = await Promise.all([
     optional(() => gatewayFetch<Page<Asset>>("/api/v1/assets?limit=100")),
     optional(() => gatewayFetch<Control[]>("/api/v1/controls")),
     optional(() => gatewayFetch<RiskSummary>("/api/v1/risk/summary")),
     optional(() => gatewayFetch<{ items: TopFinding[] }>("/api/v1/risk/top-findings?limit=15")),
     optional(() => gatewayFetch<Page<AssessmentRun>>("/api/v1/assessments/runs?limit=5")),
+    optional(() => gatewayFetch<{ analysis: GraphAnalysis | null }>("/api/v1/graph/analysis/latest")),
+    optional(() => gatewayFetch<{ items: ConcentrationArea[] }>("/api/v1/graph/concentration-areas?limit=10")),
   ]);
+  const analysis = graph?.analysis ?? null;
   const canRun = me.permissions.includes("assessments:run");
 
   const tier0 = assets?.items.filter((a) => a.tier === "Tier0").length ?? 0;
@@ -139,6 +145,41 @@ export default async function Dashboard() {
               ))}
             </tbody>
           </table>
+        )}
+
+        <h2>Exposure graph</h2>
+        {graph === null ? <p className="muted">You do not have permission to view the exposure graph.</p> : !analysis ? (
+          <p className="muted">No graph analysis yet. Run an AD assessment to collect relationships.</p>
+        ) : (
+          <>
+            <div className="cards">
+              <div className="card"><div className="label">Objects with a path to Tier 0</div><div className="value">{analysis.exposed_nodes}</div></div>
+              <div className="card"><div className="label">One hop from Tier 0</div><div className="value">{analysis.one_hop_nodes}</div></div>
+              <div className="card"><div className="label">Tier-0 objects</div><div className="value">{analysis.tier0_nodes}</div></div>
+              <div className="card">
+                <div className="label">Graph</div>
+                <div className="value">{analysis.node_count}<span className="muted small"> nodes · {analysis.edge_count} edges</span></div>
+              </div>
+            </div>
+            <table>
+              <thead><tr><th>Score</th><th>Concentration</th><th>Anchor</th><th>Objects</th><th>Summary</th></tr></thead>
+              <tbody>
+                {(areas?.items.length ?? 0) === 0 && <tr><td colSpan={5} className="muted">No risk concentration areas.</td></tr>}
+                {areas?.items.map((a) => (
+                  <tr key={a.area_id}>
+                    <td>{a.score.toFixed(2)}</td>
+                    <td>{a.area_type.replaceAll("_", " ")}</td>
+                    <td>{a.anchor_display_name}<div className="muted small">{a.anchor_node_type}</div></td>
+                    <td>{a.member_count}</td>
+                    <td className="muted small">{a.summary}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted small">
+              Analysed {new Date(analysis.completed_at).toLocaleString("en-GB", { timeZone: "UTC" })} UTC.
+            </p>
+          </>
         )}
 
         <h2>Assets</h2>

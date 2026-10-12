@@ -14,7 +14,7 @@ from eeap_shared.utils.runtime import Subscription
 from eeap_shared.utils.settings import ServiceSettings
 
 from .config import SCHEMA
-from .engine import mark_dirty, recompute, upsert_asset_fact, upsert_finding_fact
+from .engine import mark_dirty, recompute, replace_graph_facts, upsert_asset_fact, upsert_finding_fact
 
 logger = logging.getLogger("eeap.ai.worker")
 
@@ -22,6 +22,7 @@ SCORING_GROUP = "ai-engine.scoring"
 RECOMPUTE_INTERVAL_SECONDS = 2.0
 FINDING_EVENTS = {"finding.created", "finding.updated", "finding.resolved"}
 ASSET_EVENTS = {"asset.created", "asset.updated", "asset.criticality_changed"}
+GRAPH_ANALYSIS_EVENT = "graph.analysis_completed"
 
 
 def scoring_handler(engine: AsyncEngine, redis: Redis):
@@ -29,7 +30,7 @@ def scoring_handler(engine: AsyncEngine, redis: Redis):
 
     async def handle(envelope: dict) -> None:
         event_type, data = envelope["type"], envelope["data"]
-        if event_type not in FINDING_EVENTS | ASSET_EVENTS | {"assessment.run_completed"}:
+        if event_type not in FINDING_EVENTS | ASSET_EVENTS | {"assessment.run_completed", GRAPH_ANALYSIS_EVENT}:
             return
         occurred_at = datetime.fromisoformat(envelope["occurred_at"])
         async with engine.begin() as conn:
@@ -39,11 +40,16 @@ def scoring_handler(engine: AsyncEngine, redis: Redis):
                 applied = await upsert_finding_fact(conn, data, occurred_at)
             elif event_type in ASSET_EVENTS:
                 applied = await upsert_asset_fact(conn, event_type, data, occurred_at)
+            elif event_type == GRAPH_ANALYSIS_EVENT:
+                applied = await replace_graph_facts(conn, data)
             else:
                 applied = True
         if not applied:
             return
-        if event_type in FINDING_EVENTS:
+        if event_type == GRAPH_ANALYSIS_EVENT:
+            # Propagation can change for any finding, so the whole model is rescored.
+            await mark_dirty(redis, full=True)
+        elif event_type in FINDING_EVENTS:
             # Breadth (B) depends on every finding of the control, so the whole control cohort is rescored.
             await mark_dirty(redis, controls=[data["control_id"]], assets=[data["asset_id"]])
         elif event_type in ASSET_EVENTS:

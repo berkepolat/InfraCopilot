@@ -682,7 +682,7 @@ paths:
     get:
       tags: [Graph]
       x-permission: graph:read
-      summary: Privilege relationship chains from a node to Tier-0 assets (exposure analysis, bounded depth)
+      summary: Shortest privilege relationship chains from a node to Tier-0 assets (latest analysis, bounded depth)
       parameters:
         - {name: from_node_id, in: query, required: true, schema: {type: string, format: uuid}}
         - {name: max_depth, in: query, schema: {type: integer, minimum: 1, maximum: 6, default: 4}}
@@ -693,8 +693,38 @@ paths:
     get:
       tags: [Graph]
       x-permission: graph:read
+      parameters:
+        - {name: area_type, in: query, schema: {type: string, enum: [privileged_group_sprawl, admin_access_hub, delegation_cluster, service_account_hub, tier0_exposure]}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
       responses:
-        '200': {description: Risk concentration areas from the latest analysis}
+        '200': {description: Risk concentration areas from the latest analysis, highest score first, content: {application/json: {schema: {type: object, properties: {items: {type: array, items: {$ref: '#/components/schemas/ConcentrationArea'}}}}}}}
+  /graph/analysis/latest:
+    get:
+      tags: [Graph]
+      x-permission: graph:read
+      summary: Latest completed graph analysis with Tier-0 exposure counts
+      responses:
+        '200':
+          description: Latest analysis, or null before the first analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  analysis:
+                    type: [object, 'null']
+                    properties:
+                      analysis_id: {type: string, format: uuid}
+                      trigger: {type: string}
+                      node_count: {type: integer}
+                      edge_count: {type: integer}
+                      parameters: {type: object}
+                      started_at: {type: string, format: date-time}
+                      completed_at: {type: string, format: date-time}
+                      exposed_nodes: {type: integer, description: Non-Tier-0 objects with a path to Tier 0}
+                      tier0_nodes: {type: integer}
+                      one_hop_nodes: {type: integer}
+                      areas: {type: object, additionalProperties: {type: integer}}
   /graph/relationships:
     get:
       tags: [Graph]
@@ -1188,6 +1218,19 @@ components:
         nodes: {type: array, items: {$ref: '#/components/schemas/GraphNode'}}
         edges: {type: array, items: {$ref: '#/components/schemas/GraphEdge'}}
         truncated: {type: boolean}
+    ConcentrationArea:
+      type: object
+      properties:
+        area_id: {type: string, format: uuid}
+        analysis_id: {type: string, format: uuid}
+        area_type: {type: string, enum: [privileged_group_sprawl, admin_access_hub, delegation_cluster, service_account_hub, tier0_exposure]}
+        score: {type: number, minimum: 0, maximum: 1}
+        member_count: {type: integer}
+        summary: {type: string}
+        anchor_node_id: {type: string, format: uuid}
+        anchor_node_key: {type: string}
+        anchor_node_type: {type: string}
+        anchor_display_name: {type: string}
     Report:
       type: object
       properties:
