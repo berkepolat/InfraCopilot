@@ -14,8 +14,10 @@ from .routes_table import resolve
 router = APIRouter(prefix="/api/v1", tags=["Proxy"])
 
 _FORWARD_REQUEST_HEADERS = ("content-type", "accept", "if-match", "if-none-match", "idempotency-key")
-_FORWARD_RESPONSE_HEADERS = ("content-type", "etag", "location", "retry-after", "cache-control")
+_FORWARD_RESPONSE_HEADERS = ("content-type", "etag", "location", "retry-after", "cache-control",
+                             "content-disposition")
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
+DELEGATION_HEADER = "x-eeap-delegation"
 
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
@@ -44,6 +46,12 @@ async def proxy(path: str, request: Request, state: GatewayState = Depends(gatew
                                                    details={"required_permission": permission}, **audit_base))
         raise HTTPException(403, detail="insufficient permission")
 
+    if method in route.rate_limits:
+        allowed, retry_after = await state.limiter.hit(f"route:{resource_type}:{method}", claims["sub"],
+                                                       route.rate_limits[method])
+        if not allowed:
+            raise HTTPException(429, detail="rate limit exceeded", headers={"Retry-After": str(retry_after)})
+
     max_body = route.max_body_bytes or state.settings.max_body_bytes
     content_length = int(request.headers.get("content-length") or 0)
     if content_length > max_body:
@@ -52,14 +60,22 @@ async def proxy(path: str, request: Request, state: GatewayState = Depends(gatew
     if len(body) > max_body:
         raise HTTPException(413, detail="request body too large")
 
-    audience, base_url = state.settings.upstreams()[route.upstream]
-    token = mint_internal_token(
-        state.internal_private_key, audience=audience, subject=f"user:{claims['sub']}",
-        permissions=claims.get("perms", []), scope=claims.get("scope") or {}, request_id=request_id_var.get(),
-    )
+    upstreams = state.settings.upstreams()
+    audience, base_url = upstreams[route.upstream]
+
+    def token_for(target_audience: str) -> str:
+        return mint_internal_token(
+            state.internal_private_key, audience=target_audience, subject=f"user:{claims['sub']}",
+            permissions=claims.get("perms", []), scope=claims.get("scope") or {}, request_id=request_id_var.get(),
+        )
+
     headers = {k: v for k, v in request.headers.items() if k.lower() in _FORWARD_REQUEST_HEADERS}
-    headers["authorization"] = f"Bearer {token}"
+    headers["authorization"] = f"Bearer {token_for(audience)}"
     headers["x-request-id"] = request_id_var.get() or ""
+    if route.delegate.get(method):
+        # Same user, same permissions, but each token is only valid for one named upstream.
+        headers[DELEGATION_HEADER] = ",".join(f"{key}={token_for(upstreams[key][0])}"
+                                              for key in route.delegate[method])
 
     try:
         upstream = await state.http.request(method, base_url + upstream_path, params=request.query_params,
@@ -75,6 +91,10 @@ async def proxy(path: str, request: Request, state: GatewayState = Depends(gatew
         await write_audit(state.engine, AuditEntry(action=f"{resource_type}.{method.lower()}", outcome=outcome,
                                                    details={"status": upstream.status_code, "path": upstream_path},
                                                    **audit_base))
+    elif (read_action := route.audited_read(upstream_path)) is not None:
+        await write_audit(state.engine, AuditEntry(
+            action=read_action, outcome="success" if upstream.status_code < 400 else "failure",
+            details={"status": upstream.status_code, "path": upstream_path}, **audit_base))
 
     response_headers = {k: v for k, v in upstream.headers.items() if k.lower() in _FORWARD_RESPONSE_HEADERS}
     return Response(content=upstream.content, status_code=upstream.status_code, headers=response_headers)

@@ -12,9 +12,11 @@ import {
   type Page,
   type Rating,
   type RemediationItem,
+  type Report,
   type RiskSummary,
   type TopFinding,
 } from "@/lib/gateway";
+import { RequestReport } from "./RequestReport";
 import { RunAssessment } from "./RunAssessment";
 import { SignOut } from "./SignOut";
 
@@ -53,7 +55,7 @@ export default async function Dashboard() {
     throw error;
   }
 
-  const [assets, controls, risk, topFindings, runs, graph, areas, roadmap, mitre] = await Promise.all([
+  const [assets, controls, risk, topFindings, runs, graph, areas, roadmap, mitre, reports] = await Promise.all([
     optional(() => gatewayFetch<Page<Asset>>("/api/v1/assets?limit=100")),
     optional(() => gatewayFetch<Control[]>("/api/v1/controls")),
     optional(() => gatewayFetch<RiskSummary>("/api/v1/risk/summary")),
@@ -63,9 +65,11 @@ export default async function Dashboard() {
     optional(() => gatewayFetch<{ items: ConcentrationArea[] }>("/api/v1/graph/concentration-areas?limit=10")),
     optional(() => gatewayFetch<{ items: RemediationItem[] }>("/api/v1/risk/remediation?limit=20")),
     optional(() => gatewayFetch<{ techniques: MitreTechnique[] }>("/api/v1/risk/mitre")),
+    optional(() => gatewayFetch<Page<Report>>("/api/v1/reports?limit=10")),
   ]);
   const analysis = graph?.analysis ?? null;
   const canRun = me.permissions.includes("assessments:run");
+  const canReport = me.permissions.includes("reports:create");
 
   const tier0 = assets?.items.filter((a) => a.tier === "Tier0").length ?? 0;
   const exposure = risk?.exposure_score ?? null;
@@ -190,6 +194,32 @@ export default async function Dashboard() {
                   <td className="muted small">{t.tactics.join(", ")}</td>
                   <td>{t.open_findings}</td>
                   <td className="muted small">{t.controls.join(", ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <h2>Reports</h2>
+        {canReport && <RequestReport />}
+        {reports === null ? <p className="muted">You do not have permission to view reports.</p> : (
+          <table>
+            <thead><tr><th>Requested</th><th>Report</th><th>Data as of</th><th>Status</th><th>Download</th></tr></thead>
+            <tbody>
+              {reports.items.length === 0 && <tr><td colSpan={5} className="muted">No reports yet.</td></tr>}
+              {reports.items.map((r) => (
+                <tr key={r.report_id}>
+                  <td className="small">{new Date(r.created_at).toLocaleString("en-GB", { timeZone: "UTC" })} UTC</td>
+                  <td>{r.title}</td>
+                  <td className="small">{new Date(r.snapshot_at).toLocaleString("en-GB", { timeZone: "UTC" })} UTC</td>
+                  <td>{r.status}{r.error && <div className="muted small">{r.error}</div>}</td>
+                  <td>
+                    {r.available_formats.map((f) => (
+                      <a key={f} href={`/api/reports/${r.report_id}/download/${f}`} className="small" style={{ marginRight: 8 }}>
+                        {f.toUpperCase()}
+                      </a>
+                    ))}
+                  </td>
                 </tr>
               ))}
             </tbody>

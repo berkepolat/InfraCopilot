@@ -601,6 +601,7 @@ services:
       MINIO_SECRET_KEY_FILE: /run/secrets/minio_secret_reporting
       REPORTS_BUCKET: eeap-reports
       REPORT_URL_TTL_SECONDS: ${REPORT_URL_TTL_SECONDS:-300}
+      REPORT_ORGANIZATION: ${REPORT_ORGANIZATION:-EEAP}
     secrets: &reporting-secrets [db_password_reporting, redis_password, jwt_public_key, internal_token_public_key, minio_secret_reporting]
     depends_on:
       reporting-service-migrate:

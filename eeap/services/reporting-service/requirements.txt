@@ -1,1 +1,4 @@
 # Service-specific dependencies (common ones come from eeap-shared).
+minio>=7.2,<8
+jinja2>=3.1,<4
+weasyprint>=62,<67

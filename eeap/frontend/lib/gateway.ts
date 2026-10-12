@@ -30,7 +30,26 @@ export async function gatewayFetch<T>(path: string, init: RequestInit = {}): Pro
   return (await response.json()) as T;
 }
 
+/** Raw gateway response (for binary downloads); the caller checks the status. */
+export async function gatewayRaw(path: string): Promise<Response> {
+  const token = cookies().get(SESSION_COOKIE)?.value;
+  if (!token) throw new GatewayError(401, "not signed in");
+  return fetch(gatewayUrl(path), { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
+}
+
 export type Page<T> = { items: T[]; next_cursor: string | null };
+
+export type Report = {
+  report_id: string;
+  report_type: string;
+  title: string;
+  formats: string[];
+  available_formats: string[];
+  status: "queued" | "rendering" | "completed" | "failed" | "expired";
+  error: string | null;
+  snapshot_at: string;
+  created_at: string;
+};
 
 export type Asset = {
   asset_id: string;

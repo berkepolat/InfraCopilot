@@ -9,7 +9,11 @@ RUN pip install --prefix=/install ./shared -r requirements.txt
 
 FROM python:3.12-slim AS runtime
 LABEL org.opencontainers.image.title="eeap-reporting-service" org.opencontainers.image.source="eeap"
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 EEAP_ROLE=api
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 EEAP_ROLE=api XDG_CACHE_HOME=/tmp/cache
+# Pango and fonts for WeasyPrint (PDF rendering); the root filesystem is read-only, caches go to /tmp.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin eeap
 COPY --from=builder /install /usr/local
 WORKDIR /app

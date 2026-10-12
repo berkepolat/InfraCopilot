@@ -53,5 +53,5 @@ controls) and per tactic. Techniques without open findings are omitted.
 
 ## Next steps
 
-- Executive and technical reports with the roadmap and ATT&CK view (Reporting Service).
+- Executive and technical reports with the roadmap and ATT&CK view: see [doc 16](16-reporting.md).
 - Optional LLM narratives, labelled advisory and never affecting scores (ADR-0010).

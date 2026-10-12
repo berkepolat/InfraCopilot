@@ -12,6 +12,15 @@ class Route:
     permissions: dict[str, str]
     overrides: tuple[tuple[str, re.Pattern[str], str], ...] = field(default_factory=tuple)
     max_body_bytes: int | None = None  # None = gateway default
+    # method -> upstreams the service may read on the user's behalf during this request (ADR-0016)
+    delegate: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # method -> extra per-user rate limit, e.g. "20/hour"
+    rate_limits: dict[str, str] = field(default_factory=dict)
+    # GET requests that are audited: (pattern, action)
+    audited_reads: tuple[tuple[re.Pattern[str], str], ...] = field(default_factory=tuple)
+
+    def audited_read(self, path: str) -> str | None:
+        return next((action for pattern, action in self.audited_reads if pattern.fullmatch(path)), None)
 
     def matches(self, path: str) -> bool:
         return path == self.prefix or path.startswith(self.prefix + "/")
@@ -44,7 +53,9 @@ ROUTES: tuple[Route, ...] = (
           max_body_bytes=50 * 1024 * 1024),
     Route("/graph", "relationship", {"GET": "graph:read"}),
     Route("/risk", "ai", {"GET": "risk:read", "POST": "risk:manage", "PATCH": "risk:manage"}),
-    Route("/reports", "reporting", {"GET": "reports:read", "POST": "reports:create"}),
+    Route("/reports", "reporting", {"GET": "reports:read", "POST": "reports:create"},
+          delegate={"POST": ("ai", "assessment")}, rate_limits={"POST": "20/hour"},
+          audited_reads=((re.compile(r"/reports/[^/]+/download/[a-z]+"), "reports.download"),)),
 )
 
 

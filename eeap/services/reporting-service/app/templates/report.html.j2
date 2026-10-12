@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ meta.title }}</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm 18mm; @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 8pt; color: #666; } }
+  body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 10pt; color: #1b1f24; margin: 0 auto; max-width: 1100px; }
+  h1 { font-size: 20pt; margin: 0 0 4px; }
+  h2 { font-size: 13pt; margin: 22px 0 8px; border-bottom: 1px solid #d0d7de; padding-bottom: 4px; }
+  h3 { font-size: 11pt; margin: 14px 0 6px; }
+  .meta, .muted { color: #57606a; }
+  .small { font-size: 8.5pt; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  th, td { border-bottom: 1px solid #e5e7eb; padding: 4px 6px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  table.fixed { table-layout: fixed; }
+  th { background: #f6f8fa; font-weight: 600; }
+  .cards { display: flex; gap: 10px; margin: 10px 0; }
+  .card { flex: 1; border: 1px solid #d0d7de; border-radius: 6px; padding: 8px 10px; }
+  .card .label { font-size: 8.5pt; color: #57606a; }
+  .card .value { font-size: 16pt; font-weight: 600; }
+  .badge { display: inline-block; border-radius: 4px; padding: 0 5px; font-size: 8.5pt; font-weight: 600; color: #fff; }
+  .Critical { background: #b42318; } .High { background: #d9480f; } .Medium { background: #b7791f; } .Low { background: #2f855a; }
+  .note { border-left: 3px solid #d0d7de; padding: 4px 8px; color: #57606a; }
+{% if meta.report_type == "technical" %}
+  @page { size: A4 landscape; }
+{% endif %}
+</style>
+</head>
+<body>
+<h1>{{ meta.title }}</h1>
+<div class="meta">
+  {{ meta.organization }} · Data as of {{ meta.snapshot_at | dt }} · Report {{ meta.report_id }}
+</div>
+<p class="note small">
+  Read-only posture assessment. Scores are deterministic (scoring model {{ meta.scoring_model }});
+  ATT&amp;CK references describe techniques that open weaknesses may enable and are provided as defensive context.
+</p>
+{% if omitted %}
+<p class="note small">Sections omitted because the requester lacks permission: {{ omitted | join(", ") }}.</p>
+{% endif %}
+
+{% macro badge(rating, text=None) %}{% if rating %}<span class="badge {{ rating }}">{{ text if text is not none else rating }}</span>{% else %}{{ text if text is not none else "—" }}{% endif %}{% endmacro %}
+
+{% macro roadmap_table(items) %}
+<table class="fixed">
+  <colgroup><col style="width:4%"><col style="width:38%"><col style="width:8%"><col style="width:9%"><col style="width:20%"><col style="width:11%"><col style="width:10%"></colgroup>
+  <thead><tr><th>#</th><th>Action</th><th>Effort</th><th>Risk reduction</th><th>Breaks scenarios</th><th>ATT&amp;CK</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for i in items %}
+    <tr>
+      <td>{{ i.priority }}</td>
+      <td><strong>{{ i.title }}</strong> <span class="muted small">({{ i.control_id }}, {{ i.open_findings }} open)</span>
+        <div class="small">{{ i.guidance }}</div></td>
+      <td>{{ i.effort }}</td>
+      <td>{{ i.expected_risk_reduction }}%</td>
+      <td class="small">{% for s in i.scenarios %}{{ s.title }}{% if not loop.last %}; {% endif %}{% else %}—{% endfor %}</td>
+      <td class="small">{% for t in i.techniques %}{{ t.technique_id }}{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</td>
+      <td>{{ i.status }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="muted">No open remediation items.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+
+{% for section in sections %}
+{% if section == "overview" %}
+<h2>Overview</h2>
+{% if has_summary %}
+<div class="cards">
+  <div class="card"><div class="label">Exposure score</div>
+    <div class="value">{% if exposure %}{{ exposure.score }} {{ badge(exposure.rating) }}{% else %}—{% endif %}</div></div>
+  <div class="card"><div class="label">Open risk findings</div><div class="value">{{ open_findings }}</div>
+    <div class="small">{% for r, n in finding_ratings %}{{ badge(r, r[0] ~ " " ~ n) }} {% endfor %}</div></div>
+  <div class="card"><div class="label">Active risk scenarios</div><div class="value">{{ active_scenarios }}</div></div>
+  {% if has_remediation %}
+  <div class="card"><div class="label">Immediate actions</div><div class="value">{{ immediate_actions }}</div></div>
+  {% endif %}
+</div>
+{% if has_remediation and remediation %}
+<p>The highest-value action is <strong>{{ remediation[0].title }}</strong> ({{ remediation[0].control_id }}),
+  expected to remove about {{ remediation[0].expected_risk_reduction }}% of the current open risk.</p>
+{% endif %}
+{% else %}
+<p class="muted">Risk data is not available to the requester.</p>
+{% endif %}
+
+{% elif section == "priority_actions" and has_remediation %}
+<h2>Priority actions</h2>
+{{ roadmap_table(remediation[:10]) }}
+
+{% elif section == "roadmap" and has_remediation %}
+<h2>Remediation roadmap</h2>
+{% for phase, items in phases if items %}
+<h3>{{ phase }} ({{ items | length }})</h3>
+{{ roadmap_table(items) }}
+{% else %}
+<p class="muted">No open remediation items.</p>
+{% endfor %}
+
+{% elif section == "scenarios" and has_scenarios %}
+<h2>Risk scenarios</h2>
+<table>
+  <thead><tr><th>Score</th><th>Scenario</th><th>Chain</th><th>First detected</th></tr></thead>
+  <tbody>
+  {% for s in scenarios %}
+    <tr>
+      <td>{{ badge(s.rating, s.score) }}</td>
+      <td>{{ s.title }}<div class="muted small">{{ s.rule_id }} · {{ s.summary }}</div></td>
+      <td class="small">{% for st in s.stages if st.matched %}{{ st.name }}{% if not loop.last %} → {% endif %}{% endfor %}</td>
+      <td class="small">{{ s.first_detected_at | dt }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">No active risk scenarios.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% elif section == "tactics" and has_mitre %}
+<h2>ATT&amp;CK tactics exposed</h2>
+<table>
+  <thead><tr><th>Tactic</th><th>Techniques</th><th>Open findings</th><th>Top score</th></tr></thead>
+  <tbody>
+  {% for t in tactics %}
+    <tr><td>{{ t.tactic }}</td><td>{{ t.techniques }}</td><td>{{ t.open_findings }}</td><td>{{ t.max_score }}</td></tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">No open weaknesses mapped to ATT&amp;CK.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% elif section == "techniques" and has_mitre %}
+<h2>ATT&amp;CK techniques</h2>
+<table>
+  <thead><tr><th>Technique</th><th>Tactics</th><th>Open findings</th><th>Top score</th><th>Controls</th></tr></thead>
+  <tbody>
+  {% for t in techniques %}
+    <tr>
+      <td><strong>{{ t.technique_id }}</strong> {{ t.name }}<div class="muted small">{{ t.url }}</div></td>
+      <td class="small">{{ t.tactics | join(", ") }}</td>
+      <td>{{ t.open_findings }}</td><td>{{ t.max_score }}</td>
+      <td class="small">{{ t.controls | join(", ") }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No open weaknesses mapped to ATT&amp;CK.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% elif section == "top_assets" and has_top_assets %}
+<h2>Most exposed assets</h2>
+<table>
+  <thead><tr><th>Score</th><th>Asset</th><th>Criticality</th><th>Tier</th><th>Owner</th></tr></thead>
+  <tbody>
+  {% for a in top_assets %}
+    <tr><td>{{ badge(a.rating, a.score) }}</td><td>{{ a.hostname or a.asset_id }}</td><td>{{ a.criticality or "—" }}</td>
+      <td>{{ a.tier or "—" }}</td><td>{{ a.owner or "—" }}</td></tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No scored assets.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% elif section == "findings" and has_findings %}
+<h2>Open findings ({{ findings | length }})</h2>
+<table class="fixed">
+  <colgroup><col style="width:6%"><col style="width:13%"><col style="width:11%"><col style="width:22%"><col style="width:8%"><col style="width:10%"><col style="width:30%"></colgroup>
+  <thead><tr><th>Score</th><th>Control</th><th>Asset</th><th>Subject</th><th>Severity</th><th>Status</th><th>Recommendation</th></tr></thead>
+  <tbody>
+  {% for f in findings %}
+    <tr>
+      <td>{{ badge(f.rating, f.score) }}</td>
+      <td>{{ f.control_id }}<div class="muted small">{{ f.control_name or f.category or "" }}</div></td>
+      <td>{{ f.hostname or f.asset_id }}</td>
+      <td class="small">{{ f.subject_key or "—" }}</td>
+      <td>{{ f.severity }}</td>
+      <td class="small">{{ f.status }} · {{ f.lifecycle_state | replace("_", " ") }}</td>
+      <td class="small">{{ f.recommendation or "—" }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="muted">No open findings.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endfor %}
+</body>
+</html>

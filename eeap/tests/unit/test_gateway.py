@@ -41,6 +41,15 @@ def test_unmapped_method_has_no_permission():
     assert resolve("/graph/nodes").permission_for("DELETE", "/graph/nodes") is None
 
 
+def test_report_creation_delegates_reads_and_downloads_are_audited():
+    route = resolve("/reports")
+    assert route.delegate == {"POST": ("ai", "assessment")}
+    assert route.rate_limits == {"POST": "20/hour"}
+    assert route.audited_read("/reports/1b2c/download/pdf") == "reports.download"
+    assert route.audited_read("/reports/1b2c") is None
+    assert resolve("/assets").delegate == {}
+
+
 def test_password_hash_round_trip():
     password = "a" * MIN_PASSWORD_LENGTH
     hashed = hash_password(password)
