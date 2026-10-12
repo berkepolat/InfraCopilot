@@ -33,7 +33,7 @@ New-Item -ItemType Directory -Path $roleDir -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Get-EeapSecurityPosture.ps1') `
     -Destination (Join-Path $moduleRoot 'EeapPosture.psm1') -Force
 New-ModuleManifest -Path (Join-Path $moduleRoot 'EeapPosture.psd1') -RootModule 'EeapPosture.psm1' `
-    -ModuleVersion '1.0.0' -FunctionsToExport 'Get-EeapSecurityPosture' -Description 'EEAP read-only posture endpoint'
+    -ModuleVersion '1.1.0' -FunctionsToExport 'Get-EeapSecurityPosture' -Description 'EEAP read-only posture endpoint'
 New-PSRoleCapabilityFile -Path (Join-Path $roleDir 'EeapPosture.psrc') `
     -Description 'EEAP read-only security posture' -ModulesToImport 'EeapPosture' `
     -VisibleFunctions 'Get-EeapSecurityPosture'

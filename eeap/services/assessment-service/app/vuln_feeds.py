@@ -23,6 +23,7 @@ from eeap_shared.utils.events import mark_processed
 
 from . import exploit_data, vulns
 from .config import SCHEMA, AssessmentSettings
+from .controls import win_host
 from .storage import ObjectStore
 
 logger = logging.getLogger("eeap.assessment.vuln_feeds")
@@ -256,6 +257,19 @@ async def attach_vulnerabilities(conn: AsyncConnection, linux_hosts: dict[str, d
         }
     await attach_exploit_data(conn, [r["vulnerabilities"] for r in linux_hosts.values()
                                      if (r.get("vulnerabilities") or {}).get("status") == "ok"])
+
+
+async def attach_update_exploit_data(conn: AsyncConnection, windows_hosts: dict[str, dict]) -> None:
+    """Adds KEV/EPSS context to the missing Windows security updates (WIN-010) of every assessed host."""
+    wrapped = []
+    for result in windows_hosts.values():
+        missing = win_host.security_updates(result.get("posture") if result.get("status") == "ok" else None)
+        if missing:
+            wrapped.append((result, {"vulnerable": missing}))
+    if wrapped:
+        await attach_exploit_data(conn, [w for _, w in wrapped])
+        for result, w in wrapped:
+            result["exploit_data"] = w["exploit_data"]
 
 
 async def attach_exploit_data(conn: AsyncConnection, results: list[dict]) -> None:

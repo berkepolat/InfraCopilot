@@ -298,6 +298,9 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
     if winrm_target and any(c in win_host.WINRM_CONTROLS for c in control_ids):
         windows_hosts = await asyncio.to_thread(
             winrm_posture.collect_hosts, ips, winrm_target, concurrency=settings.winrm_concurrency)
+        if "WIN-010" in control_ids:
+            async with engine.connect() as conn:
+                await vuln_feeds.attach_update_exploit_data(conn, windows_hosts)
     linux_hosts: dict[str, dict] = {}
     linux_target = settings.linux_target()
     if linux_target and any(c in linux_host.LINUX_CONTROLS for c in control_ids):

@@ -21,7 +21,13 @@ MEMBER_SERVER = {
     "schema": "eeap.windows.posture/1",
     "host": {"computer_name": "APP01", "dns_domain": "corp.example", "domain_role": 3,
              "is_domain_controller": False, "os_caption": "Microsoft Windows Server 2022 Standard",
-             "os_version": "10.0.20348", "os_build": "20348"},
+             "os_version": "10.0.20348", "os_build": "20348", "os_ubr": 4294, "edition_id": "ServerStandard",
+             "installation_type": "Server", "product_type": 3, "last_boot": "2026-10-01T03:00:00Z"},
+    "updates": {
+        "hotfixes": [{"id": "KB5066782", "description": "Security Update", "installed_on": "2026-09-16T00:00:00Z"}],
+        "last_search_success": "2026-10-12T02:00:00Z", "last_install_success": "2026-09-16T03:00:00Z",
+        "pending": [], "pending_truncated": False, "reboot_required": False,
+    },
     "ntlm": {"lm_compatibility_level": 5, "no_lm_hash": 1, "restrict_sending_ntlm": None,
              "restrict_receiving_ntlm": None, "ntlm_min_server_sec": 537395200},
     "ldap": None,
@@ -74,7 +80,8 @@ def test_hardened_member_server_passes():
     found = results(MEMBER_SERVER)
     assert {c: (s, st) for c, (s, st, _) in found.items()} == {
         "WIN-003": ("ntlm", "PASS"), "WIN-007": ("local-administrators", "PASS"),
-        "WIN-009": ("endpoint-protection", "PASS")}
+        "WIN-009": ("endpoint-protection", "PASS"), "WIN-010": ("wu-scan", "PASS"),
+        "WIN-011": ("patch-currency", "PASS"), "WIN-012": ("os-lifecycle", "PASS")}
 
 
 @pytest.mark.parametrize(("ntlm", "status", "severity"), [
@@ -140,7 +147,7 @@ def test_failed_collection_leaves_controls_unassessed():
 def test_asset_details_from_posture():
     assert win_host.asset_details(host(DOMAIN_CONTROLLER)) == {
         "hostname": "DC01", "fqdn": "app01.corp.example", "os_family": "Windows",
-        "os_version": "Microsoft Windows Server 2022 Standard 20348", "domain": "corp.example",
+        "os_version": "Microsoft Windows Server 2022 Standard 20348.4294", "domain": "corp.example",
         "asset_type": "DomainController"}
     assert win_host.asset_details(host(None, status="error")) == {}
     asset = net.discovered_assets([host(MEMBER_SERVER)])[0]

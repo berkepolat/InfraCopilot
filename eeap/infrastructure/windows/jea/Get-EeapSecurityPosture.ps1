@@ -1,12 +1,13 @@
 function Get-EeapSecurityPosture {
     <#
     .SYNOPSIS
-    Read-only security posture for EEAP (WIN-003, WIN-004, WIN-005, WIN-007, WIN-009).
+    Read-only security posture for EEAP (WIN-003, WIN-004, WIN-005, WIN-007, WIN-009 … WIN-012).
 
     .DESCRIPTION
-    Reads registry values, the local Administrators group and endpoint protection status, and
-    returns them as one JSON document. Changes nothing. This is the only command exposed by the
-    EEAP.Posture JEA endpoint.
+    Reads registry values, the local Administrators group, endpoint protection status and update
+    state, and returns them as one JSON document. Changes nothing: pending updates come from the
+    Windows Update Agent's local cache (offline search), so nothing is downloaded or installed and no
+    update server is contacted. This is the only command exposed by the EEAP.Posture JEA endpoint.
     #>
     [CmdletBinding()]
     param()
@@ -17,12 +18,18 @@ function Get-EeapSecurityPosture {
         return $item.$Name
     }
 
+    function Format-Date($Value) {
+        if ($null -eq $Value -or $Value -isnot [datetime] -or $Value.Year -lt 2000) { return $null }
+        return $Value.ToUniversalTime().ToString('o')
+    }
+
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem
     $isDc = $cs.DomainRole -ge 4
     $lsa = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
     $msv = "$lsa\MSV1_0"
     $ntds = 'HKLM:\SYSTEM\CurrentControlSet\Services\NTDS\Parameters'
+    $nt = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 
     $result = [ordered]@{
         schema   = 'eeap.windows.posture/1'
@@ -34,8 +41,14 @@ function Get-EeapSecurityPosture {
             os_caption    = $os.Caption
             os_version    = $os.Version
             os_build      = $os.BuildNumber
+            os_ubr        = Read-Value $nt 'UBR'
+            display_version = Read-Value $nt 'DisplayVersion'
+            edition_id    = Read-Value $nt 'EditionID'
+            installation_type = Read-Value $nt 'InstallationType'
+            product_type  = [int]$os.ProductType
             last_boot     = $os.LastBootUpTime.ToUniversalTime().ToString('o')
         }
+        updates  = $null
         ntlm     = [ordered]@{
             lm_compatibility_level      = Read-Value $lsa 'LmCompatibilityLevel'
             no_lm_hash                  = Read-Value $lsa 'NoLMHash'
@@ -91,6 +104,51 @@ function Get-EeapSecurityPosture {
         [ordered]@{ name = $_.Name; display_name = $_.DisplayName; status = "$($_.Status)" }
     })
     $result.endpoint_protection = $protection
+
+    $updates = [ordered]@{
+        hotfixes = @(); last_search_success = $null; last_install_success = $null
+        pending = $null; pending_truncated = $false; reboot_required = $false
+    }
+    try {
+        $updates.hotfixes = @(Get-CimInstance -ClassName Win32_QuickFixEngineering -ErrorAction Stop |
+            Select-Object -First 500 | ForEach-Object {
+                $installed = $null
+                if ($_.InstalledOn) { $installed = Format-Date ([datetime]$_.InstalledOn) }
+                [ordered]@{ id = $_.HotFixID; description = $_.Description; installed_on = $installed }
+            })
+    } catch {
+        $result.errors += "hotfixes: $($_.Exception.Message)"
+    }
+    try {
+        $wua = (New-Object -ComObject Microsoft.Update.AutoUpdate).Results
+        $updates.last_search_success = Format-Date $wua.LastSearchSuccessDate
+        $updates.last_install_success = Format-Date $wua.LastInstallationSuccessDate
+    } catch {
+        $result.errors += "wua_results: $($_.Exception.Message)"
+    }
+    try {
+        $searcher = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher()
+        $searcher.Online = $false
+        $found = $searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Software'").Updates
+        $updates.pending_truncated = $found.Count -gt 200
+        $updates.pending = @(for ($i = 0; $i -lt [Math]::Min($found.Count, 200); $i++) {
+            $u = $found.Item($i)
+            [ordered]@{
+                title        = $u.Title
+                kbs          = @($u.KBArticleIDs | ForEach-Object { "KB$_" })
+                severity     = $u.MsrcSeverity
+                cves         = @($u.CveIDs)
+                categories   = @($u.Categories | ForEach-Object { $_.Name })
+                released     = Format-Date $u.LastDeploymentChangeTime
+                is_downloaded = [bool]$u.IsDownloaded
+            }
+        })
+    } catch {
+        $result.errors += "wua_search: $($_.Exception.Message)"
+    }
+    $updates.reboot_required = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') -or
+        (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')
+    $result.updates = $updates
 
     return ($result | ConvertTo-Json -Depth 6 -Compress)
 }

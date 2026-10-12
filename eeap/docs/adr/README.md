@@ -26,3 +26,4 @@ ADRs are immutable once accepted; changes are made by a new ADR that supersedes 
 | [0018](0018-ssh-forced-command-posture.md) | Linux posture over SSH with a forced, read-only command | Accepted |
 | [0019](0019-offline-osv-package-vulnerabilities.md) | Known vulnerable packages from uploaded OSV data | Accepted |
 | [0020](0020-exploitation-and-exposure-in-risk-scoring.md) | Exploitation evidence and network exposure in risk scoring | Accepted |
+| [0021](0021-windows-patch-status-from-wua-cache.md) | Windows patch status from the Windows Update Agent cache | Accepted |

@@ -24,8 +24,10 @@ identification (open ports, product/version, TLS, RDP NLA) into a network servic
 read-only web checks (security headers, exposed content such as `.git` or directory listings,
 HTTPS and certificates) ([doc 12](docs/architecture/12-net-assessment.md)).
 Windows hosts are checked without credentials for SMB signing, SMBv1, RDP NLA and WinRM HTTP, and,
-when WinRM credentials are configured, for NTLM, LDAP signing / channel binding, local Administrators
-and endpoint protection through a restricted JEA endpoint ([doc 17](docs/architecture/17-windows-winrm.md)).
+when WinRM credentials are configured, for NTLM, LDAP signing / channel binding, local Administrators,
+endpoint protection and patch status (missing security updates from the host's Windows Update cache,
+patch currency, unsupported Windows releases) through a restricted JEA endpoint
+([doc 17](docs/architecture/17-windows-winrm.md), [ADR-0021](docs/adr/0021-windows-patch-status-from-wua-cache.md)).
 Linux hosts are read over SSH with a key that is locked to one read-only posture command: sshd, updates,
 privileged access, firewall, accounts, kernel settings, file permissions, OS lifecycle and installed
 packages with known vulnerabilities, matched offline against uploaded OSV data

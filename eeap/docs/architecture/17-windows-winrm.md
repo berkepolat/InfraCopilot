@@ -1,4 +1,4 @@
-# 17 — Credentialed Windows posture over WinRM (WIN-003, 004, 005, 007, 009)
+# 17 — Credentialed Windows posture over WinRM (WIN-003, 004, 005, 007, 009 … 012)
 
 Network runs ([doc 12](12-net-assessment.md)) can also read host settings from Windows targets
 over WinRM. The scanner never gets a shell: each target registers a **JEA endpoint**
@@ -16,9 +16,10 @@ sequenceDiagram
     W->>DNS: PTR lookup for each target IP (Kerberos needs the SPN host name)
     W->>KDC: service ticket for HTTP/<host>
     W->>H: RunspacePool(configuration_name=EEAP.Posture)
-    H->>H: Get-EeapSecurityPosture (registry, CIM, local group, Defender reads)
+    H->>H: Get-EeapSecurityPosture (registry, CIM, local group, Defender, WUA cache reads)
     H-->>W: JSON eeap.windows.posture/1
-    W->>W: evaluate WIN-003/004/005/007/009 (controls/win_host.py)
+    W->>W: KEV/EPSS for missing updates (WIN-010, uploaded data)
+    W->>W: evaluate WIN-003/004/005/007/009/010/011/012 (controls/win_host.py)
 ```
 
 * Code: `app/collectors/winrm_posture.py` (I/O, pypsrp), `app/controls/win_host.py`
@@ -43,8 +44,47 @@ sequenceDiagram
 | WIN-007 Local Administrators (not on DCs) | Members of `S-1-5-32-544` | Members other than RID 500, Domain Admins (RID 512) or `WIN_LOCAL_ADMINS_ALLOWED`: WARNING Medium; else PASS |
 | WIN-009 Endpoint protection | `Get-MpComputerStatus`, known EDR services | No Defender real-time protection and no running EDR: FAIL High; Defender only with signatures older than 7 days: WARNING Medium; else PASS |
 
+| WIN-010 Missing security updates | Offline WUA search of the host's cached scan (`updates.pending`), CISA KEV / EPSS uploads | One FAIL per missing security update, severity from MSRC (Critical; Important → High; Moderate → Medium; Low; unrated → Medium), at least High if a fixed CVE is KEV-listed; none: PASS. Last WUA search > 30 days ago or never: WARNING Low (`wu-scan`) |
+| WIN-011 Patch currency | Newest `Win32_QuickFixEngineering` date / WUA last installation, reboot-pending keys | No update for > 60 days: FAIL High; > 35 days or reboot pending: WARNING Medium; no date: WARNING Low; else PASS |
+| WIN-012 OS lifecycle | Build, `EditionID`, `InstallationType` | End of security updates passed: FAIL High; within 180 days: WARNING Medium; else PASS. Unknown builds are skipped |
+
 Subjects are fixed per host (`ntlm`, `ldap-signing`, `ldap-channel-binding`,
-`local-administrators`, `endpoint-protection`).
+`local-administrators`, `endpoint-protection`, `updates`, `wu-scan`, `patch-currency`,
+`os-lifecycle`), except WIN-010 failures, which use `kb:<KB>` (or `update:<hash of title>` without
+a KB), so each missing update is its own finding and resolves when it is installed.
+
+### Patch status (WIN-010 … WIN-012)
+
+Decision: [ADR-0021](../adr/0021-windows-patch-status-from-wua-cache.md). The posture function
+reads the Windows Update Agent's **cached** results (`IUpdateSearcher.Online = false`), so the
+scan never downloads, installs or contacts Windows Update / WSUS; the list is as current as the
+host's own last scan, which `wu-scan` reports. Definition (antivirus signature) and driver updates
+are ignored. Missing updates carry `cves`, `msrc_severity`, `categories`, `released` and, when KEV
+or EPSS data was uploaded on the Vulnerability data page, `known_exploited`, `epss` and an
+`exploitability` that overrides the control default in risk scoring
+([ADR-0020](../adr/0020-exploitation-and-exposure-in-risk-scoring.md)).
+
+WIN-012 uses end-of-security-update dates per build and servicing class (Extended Security
+Updates are not considered):
+
+| Build | Release | End of security updates |
+|---|---|---|
+| 7601 | Windows 7 / Server 2008 R2 | 2020-01-14 |
+| 9200 / 9600 | Server 2012 / 2012 R2 | 2023-10-10 (Windows 8.1: 2023-01-10) |
+| 14393 | Server 2016 / Windows 10 LTSB 2016 | 2027-01-12 / 2026-10-13 |
+| 17763 | Server 2019 / Windows 10 LTSC 2019 | 2029-01-09 |
+| 19044 | Windows 10 21H2 LTSC 2021 / IoT LTSC 2021 | 2027-01-12 / 2032-01-13 |
+| 19045 | Windows 10 22H2 | 2025-10-14 |
+| 20348 | Server 2022 | 2031-10-14 |
+| 22621 / 22631 | Windows 11 22H2 / 23H2 (Home, Pro) | 2024-10-08 / 2025-11-11 |
+| 22621 / 22631 | Windows 11 22H2 / 23H2 (Enterprise, Education) | 2025-10-14 / 2026-11-10 |
+| 26100 | Server 2025 | 2034-10-10 |
+| 26100 | Windows 11 24H2 (Home, Pro / Enterprise, Education / LTSC 2024) | 2026-10-13 / 2027-10-12 / 2029-10-09 |
+| 26200 | Windows 11 25H2 (Home, Pro / Enterprise, Education) | 2027-10-12 / 2028-10-10 |
+
+Older Windows 10 and 11 feature updates are in `CLIENT_LIFECYCLE` as well. Hosts with a posture
+module older than 1.1.0 return no `updates` section; WIN-010/011 are then reported as unassessed
+and their open findings stay open — rerun `Install-EeapJea.ps1` to update the module.
 
 ## Target setup
 
@@ -87,5 +127,7 @@ run; requesting them explicitly returns 422.
 
 There is no Windows host in the lab. `tests/unit/test_win_winrm.py` covers the evaluators with
 posture fixtures, the collector with a fake invoke, and the real pypsrp client against a local
-listener that rejects authentication (`auth` stage) and a closed port (`connect` stage). The
-posture function was validated on Windows 11 and Windows PowerShell 5.1.
+listener that rejects authentication (`auth` stage) and a closed port (`connect` stage);
+`tests/unit/test_win_patch.py` covers WIN-010 … 012. The posture function was validated on
+Windows 11 and Windows PowerShell 5.1, including the update section (offline WUA search as a
+standard user, about 5 seconds).
