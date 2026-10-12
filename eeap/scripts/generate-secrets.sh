@@ -51,6 +51,8 @@ write_secret grafana_admin_password  "$(rand 24)"
 [[ -f "$DIR/llm_api_key" ]] || write_secret llm_api_key ""
 # Password of the read-only AD assessment account; empty until an AD target is configured.
 [[ -f "$DIR/ad_bind_password" ]] || write_secret ad_bind_password ""
+# Password of the WinRM/JEA scanner account; empty until credentialed Windows collection is configured.
+[[ -f "$DIR/winrm_password" ]] || write_secret winrm_password ""
 
 gen_keypair() {
   local priv="$1" pub="$2"; shift 2

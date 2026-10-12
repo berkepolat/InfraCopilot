@@ -10,12 +10,13 @@ from datetime import datetime
 
 from ..domain import ImportRow
 from ..targets import asset_id_for_ip
+from . import win_host
 
 SOURCE_TOOL = "eeap-net-probes/1.0"
 NET_CONTROL_IDS = tuple(f"NET-{n:03d}" for n in range(1, 10))
-# Windows configuration visible on the wire; the remaining WIN controls need host access.
+# Windows configuration visible on the wire; the remaining WIN controls need WinRM (win_host).
 WIN_NETWORK_CONTROLS = ("WIN-001", "WIN-002", "WIN-006", "WIN-008")
-NETWORK_RUN_CONTROLS = NET_CONTROL_IDS + WIN_NETWORK_CONTROLS
+NETWORK_RUN_CONTROLS = NET_CONTROL_IDS + WIN_NETWORK_CONTROLS + win_host.WINRM_CONTROLS
 PORT_SCAN_CONTROLS = ("NET-006", "NET-007", "NET-008", "NET-009", "WIN-006", "WIN-008")
 
 # control -> port -> (label, severity when exposed, status when exposed); all ports are in COMMON_PORTS.
@@ -34,6 +35,8 @@ class Evaluation:
     observations: list[ImportRow] = field(default_factory=list)
     assets: list[dict] = field(default_factory=list)
     evaluated_controls: list[str] = field(default_factory=list)
+    # ip -> controls that could not be evaluated there (collection failed); their findings stay open.
+    unassessed: dict[str, list[str]] = field(default_factory=dict)
 
 
 class _HostContext:
@@ -282,6 +285,9 @@ EVALUATORS: dict[str, Callable[[_HostContext], None]] = {
     "WIN-002": _win002_smbv1,
     "WIN-006": _win006_rdp_nla,
     "WIN-008": _win008_winrm,
+    "WIN-003": win_host.win003_ntlm,
+    "WIN-004": win_host.win004_ldap_signing,
+    "WIN-005": win_host.win005_channel_binding,
 }
 
 
@@ -289,30 +295,41 @@ def discovered_assets(hosts: list[dict]) -> list[dict]:
     assets = []
     for host in hosts:
         ip = host["ip"]
-        asset_id = asset_id_for_ip(ip)
+        windows = win_host.asset_details(host)
         assets.append({
-            "asset_id": asset_id,
-            "hostname": ip,
-            "fqdn": None,
-            "asset_type": "NetworkDevice",
-            "os_family": None,
-            "os_version": None,
-            "domain": None,
-            "tags": ["net:scanned"],
+            "asset_id": asset_id_for_ip(ip),
+            "hostname": windows.get("hostname") or ip,
+            "fqdn": windows.get("fqdn"),
+            "asset_type": windows.get("asset_type", "NetworkDevice"),
+            "os_family": windows.get("os_family"),
+            "os_version": windows.get("os_version"),
+            "domain": windows.get("domain"),
+            "tags": ["net:scanned", "winrm:assessed"] if windows else ["net:scanned"],
             "identifiers": [{"id_type": "ip", "value": ip}],
         })
     return assets
 
 
-def evaluate(snapshot: dict, control_ids: list[str] | None, now: datetime) -> Evaluation:
+def evaluate(snapshot: dict, control_ids: list[str] | None, now: datetime, *,
+             local_admins_allowed: list[str] | None = None) -> Evaluation:
     selected = [c for c in NETWORK_RUN_CONTROLS if control_ids is None or c in control_ids]
+    evaluators: dict[str, Callable[[_HostContext], None]] = {
+        **EVALUATORS,
+        "WIN-007": lambda ctx: win_host.win007_local_admins(ctx, local_admins_allowed or []),
+        "WIN-009": lambda ctx: win_host.win009_endpoint_protection(ctx, now),
+    }
     observations: list[ImportRow] = []
+    unassessed: dict[str, list[str]] = {}
     for host in snapshot.get("hosts") or []:
         ctx = _HostContext(host, now)
         for control_id in selected:
             if control_id in PORT_SCAN_CONTROLS and "ports" not in host["probes"]:
                 continue
-            EVALUATORS[control_id](ctx)
+            if control_id in win_host.WINRM_CONTROLS and "windows" not in host["probes"]:
+                continue
+            evaluators[control_id](ctx)
         observations.extend(ctx.rows)
+        if skipped := win_host.unassessed(host, selected):
+            unassessed[host["ip"]] = skipped
     return Evaluation(observations=observations, assets=discovered_assets(snapshot.get("hosts") or []),
-                      evaluated_controls=selected)
+                      evaluated_controls=selected, unassessed=unassessed)

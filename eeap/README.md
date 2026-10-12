@@ -21,6 +21,9 @@ scored automatically. **AD-001 … AD-010** are implemented as a read-only LDAPS
 assessment ([doc 11](docs/architecture/11-ad-assessment.md)). **NET-001 … NET-009** probe an
 explicit IP list authorized by `SCAN_ALLOWED_CIDRS`, including TCP port discovery with service
 identification (open ports, product/version, TLS, RDP NLA) into a network service inventory ([doc 12](docs/architecture/12-net-assessment.md)).
+Windows hosts are checked without credentials for SMB signing, SMBv1, RDP NLA and WinRM HTTP, and,
+when WinRM credentials are configured, for NTLM, LDAP signing / channel binding, local Administrators
+and endpoint protection through a restricted JEA endpoint ([doc 17](docs/architecture/17-windows-winrm.md)).
 AD runs also feed the exposure graph; the Relationship Engine computes Tier-0 reachability and
 risk concentration areas, which drive the propagation factor R of the risk score
 ([doc 13](docs/architecture/13-graph-analytics.md)). Correlation rules combine open findings and
@@ -48,6 +51,7 @@ WIN-0xx remain catalogued and accept imported findings only.
 | Correlation            | [docs/architecture/14-correlation.md](docs/architecture/14-correlation.md) |
 | Remediation and MITRE  | [docs/architecture/15-remediation-mitre.md](docs/architecture/15-remediation-mitre.md) |
 | Reporting              | [docs/architecture/16-reporting.md](docs/architecture/16-reporting.md) |
+| Windows over WinRM     | [docs/architecture/17-windows-winrm.md](docs/architecture/17-windows-winrm.md) |
 | ADRs                   | [docs/adr/](docs/adr/README.md) |
 | Docker Compose         | [docker-compose.yml](docker-compose.yml), [.env.example](.env.example) |
 
@@ -119,6 +123,11 @@ recreate the assessment containers, then scan from the dashboard (**Scan IPs**) 
 curl -sk -X POST https://localhost/api/v1/assessments/runs -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"targets":["10.0.0.10","10.0.0.20"]}'
 ```
+
+To include the credentialed Windows checks, register the `EEAP.Posture` JEA endpoint on the
+targets (`infrastructure/windows/jea/Install-EeapJea.ps1`), set `WINRM_USERNAME` and `WINRM_REALM`
+in `.env`, put the password in `secrets/winrm_password` and recreate the assessment containers
+([doc 17](docs/architecture/17-windows-winrm.md)).
 
 For development there is a Samba AD **test lab** seeded with configuration weaknesses
 (never use it outside development):

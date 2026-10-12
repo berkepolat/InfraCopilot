@@ -2,6 +2,9 @@
 # Build context: repository root (eeap/).
 FROM python:3.12-slim AS builder
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+# Kerberos bindings for WinRM (gssapi / krb5) are built against MIT krb5.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libkrb5-dev \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY shared/ ./shared/
 COPY services/assessment-service/requirements.txt ./requirements.txt
@@ -10,6 +13,8 @@ RUN pip install --prefix=/install ./shared -r requirements.txt
 FROM python:3.12-slim AS runtime
 LABEL org.opencontainers.image.title="eeap-assessment-service" org.opencontainers.image.source="eeap"
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 EEAP_ROLE=api
+RUN apt-get update && apt-get install -y --no-install-recommends libgssapi-krb5-2 libkrb5-3 \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin eeap
 COPY --from=builder /install /usr/local
 WORKDIR /app

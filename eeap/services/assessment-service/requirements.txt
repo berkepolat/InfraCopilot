@@ -2,3 +2,5 @@
 minio>=7.2,<8
 ldap3>=2.9,<3
 dnspython>=2.6,<3
+pypsrp>=0.8,<1
+pyspnego[kerberos]>=0.11,<1

@@ -18,6 +18,7 @@ from eeap_shared.utils.pagination import decode_cursor, page
 from eeap_shared.utils.service import get_engine
 
 from .config import SCHEMA, settings
+from .controls.win_host import WINRM_CONTROLS
 from .domain import CONTENT_TYPES, RISK_ACCEPTABLE_FROM, LifecycleState, SourceType, check_triage_transition
 from .findings_repo import FINDING_COLUMNS, get_finding, load_controls, set_lifecycle
 from .storage import ObjectStore
@@ -110,7 +111,11 @@ async def start_run(payload: RunRequest, principal: Principal = Depends(require_
         enabled = set((await conn.execute(text(
             "SELECT control_id FROM assessment.controls WHERE enabled AND execution_site = 'server' "
             "AND module = ANY(:modules)"), {"modules": modules})).scalars())
-        requested = payload.control_ids or sorted(enabled)
+        winrm_controls = set(WINRM_CONTROLS) if module == "NET" and not settings.winrm_configured() else set()
+        requested = payload.control_ids or sorted(enabled - winrm_controls)
+        if needs_winrm := sorted(set(requested) & winrm_controls):
+            raise HTTPException(422, detail=f"{', '.join(needs_winrm)} need WinRM credentials (WINRM_USERNAME), "
+                                            "which are not configured")
         unknown = sorted(set(requested) - enabled)
         if unknown:
             raise HTTPException(422, detail=f"not an enabled {module} control: {', '.join(unknown)}")

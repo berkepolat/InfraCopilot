@@ -524,7 +524,7 @@ paths:
                     properties:
                       ips: {type: array, items: {type: string}}
         '409': {description: Another run is still queued or running}
-        '422': {description: Invalid targets, missing SCAN_ALLOWED_CIDRS, or control not enabled}
+        '422': {description: Invalid targets, missing SCAN_ALLOWED_CIDRS, control not enabled, or WinRM controls (WIN-003/004/005/007/009) requested without WINRM_USERNAME}
   /assessments/runs/{run_id}:
     get:
       tags: [Assessments]

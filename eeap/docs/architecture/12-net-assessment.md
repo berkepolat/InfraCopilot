@@ -63,7 +63,8 @@ CIDR literals are not accepted in `targets` (pass individual IPs).
 Network runs also evaluate the WIN controls whose configuration is visible on the wire
 (`execution_site = server`, migration `assessment_0005`). Hosts that do not expose the service get
 no observation (not applicable). The remaining WIN controls (WIN-003, 004, 005, 007, 009) need host
-access and stay import/agent only.
+access; they are collected over WinRM through a JEA endpoint when credentials are configured
+([doc 17](17-windows-winrm.md)).
 
 | Control | Probe | FAIL / PASS |
 |---|---|---|

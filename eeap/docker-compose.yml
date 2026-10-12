@@ -381,6 +381,8 @@ services:
       IMPORTS_BUCKET: eeap-imports
       AGENT_JOB_TTL_HOURS: ${AGENT_JOB_TTL_HOURS:-24}
       SCAN_ALLOWED_CIDRS: ${SCAN_ALLOWED_CIDRS:-}
+      # Credentialed Windows posture over WinRM/JEA (docs/architecture/17). Empty = not configured.
+      WINRM_USERNAME: ${WINRM_USERNAME:-}
     secrets: &assessment-secrets
       - db_password_assessment
       - redis_password
@@ -412,6 +414,15 @@ services:
       AD_BIND_USER: ${AD_BIND_USER:-}
       AD_BIND_PASSWORD_FILE: /run/secrets/ad_bind_password
       AD_TLS_CA_FILE: ${AD_TLS_CA_FILE:-}
+      WINRM_PASSWORD_FILE: /run/secrets/winrm_password
+      WINRM_AUTH: ${WINRM_AUTH:-kerberos}
+      WINRM_PORT: ${WINRM_PORT:-5986}
+      WINRM_USE_TLS: ${WINRM_USE_TLS:-true}
+      WINRM_CA_FILE: ${WINRM_CA_FILE:-}
+      WINRM_CONFIGURATION_NAME: ${WINRM_CONFIGURATION_NAME:-EEAP.Posture}
+      WINRM_REALM: ${WINRM_REALM:-}
+      WINRM_KDC: ${WINRM_KDC:-}
+      WIN_LOCAL_ADMINS_ALLOWED: ${WIN_LOCAL_ADMINS_ALLOWED:-}
     secrets:
       - db_password_assessment
       - redis_password
@@ -419,6 +430,7 @@ services:
       - internal_token_public_key
       - minio_secret_assessment
       - ad_bind_password
+      - winrm_password
     depends_on:
       assessment-service:
         condition: service_healthy
@@ -734,4 +746,5 @@ secrets:
   tls_key:                     {file: ./secrets/tls_key.pem}
   llm_api_key:                 {file: ./secrets/llm_api_key}
   ad_bind_password:            {file: ./secrets/ad_bind_password}
+  winrm_password:              {file: ./secrets/winrm_password}
   grafana_admin_password:      {file: ./secrets/grafana_admin_password}

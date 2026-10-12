@@ -15,11 +15,12 @@ from eeap_shared.utils.events import enqueue_event, mark_processed, new_envelope
 
 from .ad_relationships import build_relationships
 from .collectors.ad_ldap import AdCollectionError, collect as collect_ad
-from .collectors import port_scan
+from .collectors import port_scan, winrm_posture
 from .collectors.net_probes import NetCollectionError, collect_targets as collect_net
 from .config import SCHEMA, AssessmentSettings
 from .controls import ad as ad_controls
 from .controls import net as net_controls
+from .controls import win_host
 from .domain import ImportRow
 from .findings_repo import ControlMeta, load_controls, upsert_observations
 from .storage import ObjectStore
@@ -53,14 +54,20 @@ async def resolve_unobserved_ad(conn: AsyncConnection, *, run_id: str, control_i
 
 
 async def resolve_unobserved_net(conn: AsyncConnection, *, run_id: str, control_ids: list[str], ips: list[str],
-                                 observed_at: datetime, controls: dict[str, ControlMeta]) -> Counter:
-    """Resolves open NET findings for the scanned IPs that this run no longer observed."""
+                                 observed_at: datetime, controls: dict[str, ControlMeta],
+                                 unassessed: dict[str, list[str]] | None = None) -> Counter:
+    """Resolves open NET findings for the scanned IPs that this run no longer observed.
+
+    Controls listed in ``unassessed`` for an IP could not be collected there and are left open.
+    """
     rows = (await conn.execute(text(
         "SELECT asset_id, control_id, subject_key, raw_data->>'ip' AS ip FROM assessment.findings "
         "WHERE source = 'server' AND control_id = ANY(:controls) AND raw_data->>'ip' = ANY(:ips) "
         "AND status <> 'PASS' AND last_seen_run_id IS DISTINCT FROM CAST(:run AS uuid) "
         "AND last_seen_at <= :observed"),
         {"controls": control_ids, "ips": ips, "run": run_id, "observed": observed_at})).mappings().all()
+    skip = unassessed or {}
+    rows = [r for r in rows if r["control_id"] not in skip.get(r["ip"], ())]
     observations = [ImportRow(asset_id=r["asset_id"], control_id=r["control_id"], status="PASS",
                               subject_key=r["subject_key"], source_tool=net_controls.SOURCE_TOOL,
                               raw_data={"ip": r["ip"]},
@@ -245,17 +252,27 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
         port_hosts = await port_scan.scan_hosts(
             ips, scanned_ports, timeout=settings.net_port_connect_timeout_seconds,
             identify_timeout=settings.net_probe_timeout_seconds, concurrency=settings.net_port_scan_concurrency)
-    probe_controls = [c for c in control_ids if c not in net_controls.PORT_SCAN_CONTROLS]
+    windows_hosts: dict[str, dict] = {}
+    winrm_target = settings.winrm_target()
+    if winrm_target and any(c in win_host.WINRM_CONTROLS for c in control_ids):
+        windows_hosts = await asyncio.to_thread(
+            winrm_posture.collect_hosts, ips, winrm_target, concurrency=settings.winrm_concurrency)
+    probe_controls = [c for c in control_ids
+                      if c not in net_controls.PORT_SCAN_CONTROLS and c not in win_host.WINRM_CONTROLS]
     snapshot = await asyncio.to_thread(
         collect_net, ips, control_ids=probe_controls, timeout=settings.net_probe_timeout_seconds)
+    snapshot["control_ids"] = control_ids
     if port_hosts:
-        snapshot["control_ids"] = control_ids
         snapshot["port_scan"] = {"collector": port_scan.COLLECTOR_ID, "version": port_scan.COLLECTOR_VERSION,
                                  "ports": scanned_ports}
-        for host in snapshot["hosts"]:
+    for host in snapshot["hosts"]:
+        if port_hosts:
             host["probes"]["ports"] = port_hosts[host["ip"]]
+        if windows_hosts:
+            host["probes"]["windows"] = windows_hosts[host["ip"]]
     observed_at = datetime.fromisoformat(snapshot["collected_at"])
-    evaluation = net_controls.evaluate(snapshot, control_ids, observed_at)
+    evaluation = net_controls.evaluate(snapshot, control_ids, observed_at,
+                                       local_admins_allowed=settings.local_admins_allowed())
 
     body = json.dumps(snapshot, sort_keys=True).encode()
     sha256 = hashlib.sha256(body).hexdigest()
@@ -276,7 +293,8 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
         outcome, rejected = await upsert_observations(conn, evaluation.observations, run_id=run_id,
                                                       source="server", observed_at=observed_at, controls=controls)
         resolved = await resolve_unobserved_net(conn, run_id=run_id, control_ids=evaluation.evaluated_controls,
-                                                ips=ips, observed_at=observed_at, controls=controls)
+                                                ips=ips, observed_at=observed_at, controls=controls,
+                                                unassessed=evaluation.unassessed)
         services = await upsert_network_services(conn, run_id=run_id, hosts=port_hosts,
                                                  scanned_ports=scanned_ports, observed_at=observed_at) \
             if port_hosts else None
@@ -297,6 +315,10 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
         if services is not None:
             stats.update(ports_scanned=len(scanned_ports), open_ports=services["open"],
                          closed_ports=services["closed"])
+        if windows_hosts:
+            failures = {ip: f"{r['stage']}: {r['error']}"[:200] for ip, r in windows_hosts.items()
+                        if r["status"] != "ok"}
+            stats.update(winrm_assessed=len(windows_hosts) - len(failures), winrm_failed=failures)
         await _finish(engine, settings, run_id, "partially_completed" if rejected else "completed", stats,
                       envelope, conn=conn, full_scope=False)
     logger.info("NET assessment run completed", extra={"run_id": run_id, "targets": len(ips),
