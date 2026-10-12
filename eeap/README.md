@@ -18,9 +18,11 @@ library, the six services, the frontend, Dockerfiles, health/metrics endpoints, 
 authentication, RBAC, audit logging, rate limiting, internal service tokens and the
 transactional outbox / Redis Streams event pipeline. Findings can be imported and are risk
 scored automatically. **AD-001 … AD-010** are implemented as a read-only LDAPS configuration
-assessment ([doc 11](docs/architecture/11-ad-assessment.md)). **NET-001 … NET-009** probe an
+assessment ([doc 11](docs/architecture/11-ad-assessment.md)). **NET-001 … NET-012** probe an
 explicit IP list authorized by `SCAN_ALLOWED_CIDRS`, including TCP port discovery with service
-identification (open ports, product/version, TLS, RDP NLA) into a network service inventory ([doc 12](docs/architecture/12-net-assessment.md)).
+identification (open ports, product/version, TLS, RDP NLA) into a network service inventory and
+read-only web checks (security headers, exposed content such as `.git` or directory listings,
+HTTPS and certificates) ([doc 12](docs/architecture/12-net-assessment.md)).
 Windows hosts are checked without credentials for SMB signing, SMBv1, RDP NLA and WinRM HTTP, and,
 when WinRM credentials are configured, for NTLM, LDAP signing / channel binding, local Administrators
 and endpoint protection through a restricted JEA endpoint ([doc 17](docs/architecture/17-windows-winrm.md)).

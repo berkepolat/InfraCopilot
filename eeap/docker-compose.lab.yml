@@ -1,5 +1,6 @@
 # Test lab: a Samba AD domain controller seeded with configuration weaknesses for AD-001..AD-010,
-# plus deliberately exposed network targets (lab-legacy, lab-redis, lab-etcd) for NET-006..009 and a
+# plus deliberately exposed network targets (lab-legacy, lab-redis, lab-etcd) for NET-006..009, a web
+# target (lab-web) for NET-010..012 and a
 # Linux posture target (lab-legacy, LIN-001..008, scanner key from secrets/linux_ssh_key).
 # Development and demonstration only — never include this file in production deployments.
 #
@@ -64,6 +65,19 @@ services:
     networks:
       eeap-scan:
         aliases: [etcd1.lab.eeap.local]
+
+  # Web target with deliberate weaknesses for NET-010..012 (see infrastructure/lab/web-host/Dockerfile).
+  lab-web:
+    profiles: [app]
+    build:
+      context: ./infrastructure
+      dockerfile: lab/web-host/Dockerfile
+    image: ${EEAP_REGISTRY:-eeap}/lab-web-host:${EEAP_VERSION:-0.1.0}
+    hostname: web1
+    restart: unless-stopped
+    networks:
+      eeap-scan:
+        aliases: [web1.lab.eeap.local]
 
   assessment-service:
     environment:

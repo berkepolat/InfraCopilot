@@ -1,10 +1,11 @@
-"""Network run evaluators: NET-001..NET-009, the WIN controls (on the wire and over WinRM) and the
+"""Network run evaluators: NET-001..NET-012, the WIN controls (on the wire and over WinRM) and the
 LIN controls (over SSH).
 
-Pure functions over net_probes / smb_negotiate / port_scan / winrm / ssh snapshots.
+Pure functions over net_probes / smb_negotiate / port_scan / web_probe / winrm / ssh snapshots.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,12 +15,14 @@ from ..targets import asset_id_for_ip
 from . import linux_host, win_host
 
 SOURCE_TOOL = "eeap-net-probes/1.0"
-NET_CONTROL_IDS = tuple(f"NET-{n:03d}" for n in range(1, 10))
+NET_CONTROL_IDS = tuple(f"NET-{n:03d}" for n in range(1, 13))
+# Web checks run on HTTP(S) services found by the port scan (collectors/web_probe.py).
+WEB_CONTROLS = ("NET-010", "NET-011", "NET-012")
 # Windows configuration visible on the wire; the remaining WIN controls need WinRM (win_host).
 WIN_NETWORK_CONTROLS = ("WIN-001", "WIN-002", "WIN-006", "WIN-008")
 NETWORK_RUN_CONTROLS = (NET_CONTROL_IDS + WIN_NETWORK_CONTROLS + win_host.WINRM_CONTROLS
                         + linux_host.LINUX_CONTROLS)
-PORT_SCAN_CONTROLS = ("NET-006", "NET-007", "NET-008", "NET-009", "WIN-006", "WIN-008")
+PORT_SCAN_CONTROLS = ("NET-006", "NET-007", "NET-008", "NET-009", "WIN-006", "WIN-008") + WEB_CONTROLS
 
 # control -> port -> (label, severity when exposed, status when exposed); all ports are in COMMON_PORTS.
 REMOTE_ADMIN = {22: "SSH", 3389: "RDP", 5985: "WinRM (HTTP)", 5986: "WinRM (HTTPS)", 5900: "VNC"}
@@ -273,6 +276,114 @@ def _win008_winrm(ctx: _HostContext) -> None:
                  summary=f"WinRM on {ctx.ip} is reachable over HTTPS (5986) only")
 
 
+def _web_results(ctx: _HostContext) -> list[dict] | None:
+    probe = ctx.host["probes"].get("web")
+    return None if probe is None else [r for r in probe.get("services") or [] if "root" in r]
+
+
+def _web_report(ctx: _HostContext, control_id: str, port: int, failures: list[tuple[str, str]],
+                warnings: list[tuple[str, str]], ok: str, **details) -> None:
+    order = {"Low": 0, "Medium": 1, "High": 2}
+    subject = f"web:{port}"
+    if failures or warnings:
+        items = failures or warnings
+        severity = max((s for _, s in items), key=order.__getitem__)
+        ctx.emit(control_id, "FAIL" if failures else "WARNING", subject=subject, severity=severity,
+                 summary=f"Web server {ctx.ip}:{port}: {'; '.join(t for t, _ in failures + warnings)}", **details)
+    else:
+        ctx.emit(control_id, "PASS", subject=subject, summary=f"Web server {ctx.ip}:{port}: {ok}", **details)
+
+
+def _net010_headers(ctx: _HostContext) -> None:
+    results = _web_results(ctx)
+    if results is None:
+        return
+    pages = [r for r in results if r["root"].get("html")]
+    for r in pages:
+        root, warnings = r["root"], []
+        if r["tls"] and not root.get("hsts"):
+            warnings.append(("no Strict-Transport-Security header", "Low"))
+        if not root.get("nosniff"):
+            warnings.append(("no X-Content-Type-Options: nosniff", "Low"))
+        if not root.get("frame_protection"):
+            warnings.append(("no clickjacking protection (X-Frame-Options or CSP frame-ancestors)", "Low"))
+        if re.search(r"\d", root.get("server") or ""):
+            warnings.append((f"Server header discloses the version ({root['server']})", "Low"))
+        _web_report(ctx, "NET-010", r["port"], [], warnings, "security headers are set",
+                    server=root.get("server"), hsts=root.get("hsts"), nosniff=root.get("nosniff"),
+                    frame_protection=root.get("frame_protection"), csp=root.get("csp"))
+    if not pages:
+        ctx.emit("NET-010", "PASS", subject="web", summary=f"No HTML web pages observed on {ctx.ip}")
+
+
+def _web_unassessed(host: dict, selected: list[str]) -> list[str]:
+    """Web controls stay unresolved on a host where a web service could not be fetched."""
+    probe = host["probes"].get("web")
+    if probe is None or all("root" in r for r in probe.get("services") or []):
+        return []
+    return [c for c in WEB_CONTROLS if c in selected]
+
+
+EXPOSURE = {
+    "git_repository": ("Git repository metadata is downloadable (/.git/)", "High", True),
+    "phpinfo": ("phpinfo() page is public", "Medium", True),
+    "server_status": ("server status page is public", "Medium", True),
+    "server_info": ("Apache server-info page is public", "Medium", True),
+    "tomcat_manager": ("Tomcat Manager console is reachable", "Medium", False),
+    "spring_actuator": ("Spring Boot actuator endpoints are public", "Medium", False),
+}
+
+
+def _net011_exposure(ctx: _HostContext) -> None:
+    results = _web_results(ctx)
+    if results is None:
+        return
+    for r in results:
+        failures, warnings = [], []
+        if r["root"].get("directory_listing"):
+            failures.append(("directory listing is enabled at /", "Medium"))
+        for item in r.get("exposed") or []:
+            text, severity, is_failure = EXPOSURE[item["indicator"]]
+            (failures if is_failure else warnings).append((text, severity))
+        if r["root"].get("default_page"):
+            warnings.append((f"{r['root']['default_page']} is served", "Low"))
+        _web_report(ctx, "NET-011", r["port"], failures, warnings, "no common sensitive content is exposed",
+                    exposed=r.get("exposed") or [], title=r["root"].get("title"))
+    if not results:
+        ctx.emit("NET-011", "PASS", subject="web", summary=f"No web services observed on {ctx.ip}")
+
+
+CERT_EXPIRY_WARNING_DAYS = 30
+
+
+def _net012_transport(ctx: _HostContext) -> None:
+    results = _web_results(ctx)
+    if results is None:
+        return
+    for r in results:
+        root, failures, warnings = r["root"], [], []
+        if not r["tls"]:
+            if root.get("password_form"):
+                failures.append(("login form served over cleartext HTTP", "High"))
+            elif not root.get("redirect_to_https") and root.get("status", 500) < 400:
+                warnings.append(("content served over cleartext HTTP without redirecting to HTTPS", "Medium"))
+        else:
+            cert = r.get("certificate") or {}
+            not_after = cert.get("not_after")
+            days = (datetime.fromisoformat(not_after) - ctx.now).days if not_after else None
+            if cert.get("expired") or (days is not None and days < 0):
+                failures.append(("TLS certificate has expired", "High"))
+            elif days is not None and days <= CERT_EXPIRY_WARNING_DAYS:
+                warnings.append((f"TLS certificate expires in {days} days", "Medium"))
+            if cert.get("self_signed"):
+                warnings.append(("TLS certificate is self-signed", "Low"))
+        _web_report(ctx, "NET-012", r["port"], failures, warnings,
+                    "served over HTTPS with a valid certificate" if r["tls"] else "redirects to HTTPS",
+                    tls=r["tls"], certificate=r.get("certificate"), redirect_to_https=root.get("redirect_to_https"))
+    if not results:
+        ctx.emit("NET-012", "PASS", subject="web", summary=f"No web services observed on {ctx.ip}")
+
+
 EVALUATORS: dict[str, Callable[[_HostContext], None]] = {
     "NET-001": _net001_dns_axfr,
     "NET-002": _net002_tls,
@@ -283,6 +394,9 @@ EVALUATORS: dict[str, Callable[[_HostContext], None]] = {
     "NET-007": _net007_cleartext,
     "NET-008": _net008_data_stores,
     "NET-009": _net009_control_planes,
+    "NET-010": _net010_headers,
+    "NET-011": _net011_exposure,
+    "NET-012": _net012_transport,
     "WIN-001": _win001_smb_signing,
     "WIN-002": _win002_smbv1,
     "WIN-006": _win006_rdp_nla,
@@ -343,7 +457,8 @@ def evaluate(snapshot: dict, control_ids: list[str] | None, now: datetime, *,
                 continue
             evaluators[control_id](ctx)
         observations.extend(ctx.rows)
-        if skipped := win_host.unassessed(host, selected) + linux_host.unassessed(host, selected):
+        if skipped := (win_host.unassessed(host, selected) + linux_host.unassessed(host, selected)
+                       + _web_unassessed(host, selected)):
             unassessed[host["ip"]] = skipped
     return Evaluation(observations=observations, assets=discovered_assets(snapshot.get("hosts") or []),
                       evaluated_controls=selected, unassessed=unassessed)

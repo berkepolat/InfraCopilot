@@ -15,7 +15,7 @@ from eeap_shared.utils.events import enqueue_event, mark_processed, new_envelope
 
 from .ad_relationships import build_relationships
 from .collectors.ad_ldap import AdCollectionError, collect as collect_ad
-from .collectors import port_scan, ssh_posture, winrm_posture
+from .collectors import port_scan, ssh_posture, web_probe, winrm_posture
 from .collectors.net_probes import NetCollectionError, collect_targets as collect_net
 from .config import SCHEMA, AssessmentSettings
 from .controls import ad as ad_controls
@@ -276,6 +276,10 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
         port_hosts = await port_scan.scan_hosts(
             ips, scanned_ports, timeout=settings.net_port_connect_timeout_seconds,
             identify_timeout=settings.net_probe_timeout_seconds, concurrency=settings.net_port_scan_concurrency)
+    web_hosts: dict[str, dict] = {}
+    if port_hosts and any(c in net_controls.WEB_CONTROLS for c in control_ids):
+        web_hosts = await web_probe.probe_hosts({ip: h["open"] for ip, h in port_hosts.items()},
+                                                timeout=settings.net_probe_timeout_seconds + 2)
     windows_hosts: dict[str, dict] = {}
     winrm_target = settings.winrm_target()
     if winrm_target and any(c in win_host.WINRM_CONTROLS for c in control_ids):
@@ -304,6 +308,8 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
     for host in snapshot["hosts"]:
         if port_hosts:
             host["probes"]["ports"] = port_hosts[host["ip"]]
+        if web_hosts:
+            host["probes"]["web"] = web_hosts[host["ip"]]
         if windows_hosts:
             host["probes"]["windows"] = windows_hosts[host["ip"]]
         if host["ip"] in linux_hosts:
@@ -354,6 +360,8 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
         if services is not None:
             stats.update(ports_scanned=len(scanned_ports), open_ports=services["open"],
                          closed_ports=services["closed"])
+        if web_hosts:
+            stats["web_services"] = sum(len(h["services"]) for h in web_hosts.values())
         if windows_hosts:
             failures = {ip: f"{r['stage']}: {r['error']}"[:200] for ip, r in windows_hosts.items()
                         if r["status"] != "ok"}

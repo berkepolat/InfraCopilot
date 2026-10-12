@@ -1,4 +1,4 @@
-# 12 — Network IP assessment (NET-001 … NET-009)
+# 12 — Network IP assessment (NET-001 … NET-012)
 
 The NET module probes **explicit IP addresses** from the assessment worker over the
 `eeap-scan` network. Checks are read-only protocol observations (TCP/TLS handshake, DNS
@@ -21,17 +21,18 @@ sequenceDiagram
     A->>X: assessment.run_requested (scope.ips, scope.ports)
     X->>W: run_requested
     W->>T: TCP connect scan + one greeting per open port (NET-006..009)
+    W->>T: GET / and fixed well-known paths on web ports (NET-010..012)
     loop each IP
         W->>T: read-only probes for selected NET-001..005 controls
     end
-    W->>W: evaluate NET-001..009
+    W->>W: evaluate NET-001..012
     W->>S: snapshot JSON (evidence, incl. open ports)
     W->>W: upsert assessment.network_services
     W->>X: finding.*, discovery.asset_observed, assessment.run_completed
 ```
 
 * Code: `services/assessment-service/app/collectors/net_probes.py`,
-  `app/collectors/port_scan.py`, `app/controls/net.py`, `app/targets.py`, `app/orchestrator.py`.
+  `app/collectors/port_scan.py`, `app/collectors/web_probe.py`, `app/controls/net.py`, `app/targets.py`, `app/orchestrator.py`.
 * `full_scope=false`: only findings for the scanned IPs are auto-resolved when no longer observed.
 * Each IP becomes/refreshes an inventory asset (`IP-<dotted>` / `IP6-…`) with identifier `id_type=ip`.
 
@@ -57,6 +58,9 @@ CIDR literals are not accepted in `targets` (pass individual IPs).
 | NET-007 Cleartext protocols | Port scan: FTP 21, Telnet 23, rexec/rlogin/rsh 512–514 | Reachable (FAIL) |
 | NET-008 Data stores | Port scan: MSSQL, Oracle, MySQL, PostgreSQL, CouchDB, Redis, Elasticsearch, Memcached, MongoDB | Reachable (WARNING) |
 | NET-009 Control planes | Port scan: Docker 2375/2376, etcd 2379, Kubernetes API 6443, kubelet 10250 | Docker API or etcd without TLS (FAIL High); otherwise WARNING |
+| NET-010 Web security headers | `GET /` on web ports (HTML responses only) | Missing HSTS (HTTPS), `X-Content-Type-Options: nosniff`, frame protection, or version in `Server` (WARNING Low) |
+| NET-011 Web content exposure | `GET /` and fixed paths (below) | `.git` metadata (FAIL High); directory listing, phpinfo, server-status/info (FAIL Medium); Tomcat Manager, Spring actuator (WARNING Medium); default page (WARNING Low) |
+| NET-012 Web transport | `GET /` plus the certificate from the port scan | Login form over HTTP or expired certificate (FAIL High); HTTP without HTTPS redirect or certificate expiring within 30 days (WARNING Medium); self-signed (WARNING Low) |
 
 ### Windows settings observable on the network (no credentials)
 
@@ -78,7 +82,25 @@ Only NEGOTIATE messages are sent: no session setup, authentication, share enumer
 sessions. NET-006 reports remote administration *reachability* only; NLA is evaluated by WIN-006.
 
 Port-scan findings use the stable subject `tcp:<port>`; a host without any matching port gets a
-single PASS (`remote-admin`, `cleartext`, `data-stores`, `control-planes`).
+single PASS (`remote-admin`, `cleartext`, `data-stores`, `control-planes`). Web findings use
+`web:<port>`, or a single PASS `web` when the host has no web service.
+
+## Web service checks
+
+`collectors/web_probe.py` runs after the port scan on every open port that answered HTTP, except
+management APIs that have their own controls (WinRM, Docker, Kubernetes, kubelet, etcd,
+Elasticsearch, CouchDB, MinIO). The scheme is HTTPS when the port scan completed a TLS handshake;
+certificates are not validated (they are evaluated by NET-012 instead).
+
+Per service it sends `GET /` and one `GET` each to `/.git/HEAD`, `/server-status`, `/server-info`,
+`/phpinfo.php`, `/manager/html` and `/actuator`. Only GET is used. Requests carry no query
+string, credentials or form data, and redirects are not followed. At most 64 KiB of each body is
+read, matched against fixed patterns and discarded; the evidence keeps only indicators (header
+flags, page title, matched paths). A path counts as exposed only when its content matches, so
+catch-all 200 pages are not reported.
+
+If a web service cannot be fetched, NET-010 … NET-012 findings for that host stay open instead of
+being resolved. Run statistics include `web_services`.
 
 ## Port discovery and service identification
 
@@ -112,7 +134,8 @@ a later scan of the same IP are marked `closed` with `closed_at`. Run statistics
 
 NET-006 … NET-009 are mapped to ATT&CK techniques (T1021.*, T1133, T1040, T1213, T1190, T1609,
 T1610) with remediation templates in the AI engine (`ai_0006`), so they flow into the risk
-scores, roadmap and reports.
+scores, roadmap and reports. NET-010 … NET-012 map to T1557, T1592, T1552.001, T1190 and T1040
+(`ai_0008`).
 
 ### Lab targets
 
@@ -123,6 +146,7 @@ scores, roadmap and reports.
 | `lab-legacy` | SSH 22, FTP 21, Telnet 23, Samba 445 (SMBv1, signing off) | NET-006 WARNING, NET-007 FAIL (Telnet High), WIN-001 / WIN-002 FAIL |
 | `lab-redis` | Redis 6379 without authentication | NET-008 WARNING |
 | `lab-etcd` | etcd 2379 over plain HTTP | NET-009 FAIL High |
+| `lab-web` | nginx: 80 with directory listing, `.git/HEAD` and status page; 8080 login form over HTTP; 443 self-signed certificate expiring in 20 days | NET-011 FAIL High (80), NET-012 FAIL High (8080) and WARNING Medium (80, 443), NET-010 WARNING Low (80, 8080) |
 
 Find their addresses with `docker network inspect eeap_eeap-scan` and set `SCAN_ALLOWED_CIDRS`
 to that subnet.
