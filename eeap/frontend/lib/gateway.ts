@@ -200,4 +200,30 @@ export type NetworkService = {
   closed_at: string | null;
 };
 
+export type VulnerabilityFeeds = {
+  ecosystems: {
+    ecosystem: string;
+    ranges: number;
+    newest_modified: string | null;
+    imported_at: string;
+    feed_id: string;
+    filename: string;
+  }[];
+  feeds: {
+    feed_id: string;
+    filename: string;
+    sha256: string;
+    size_bytes: number;
+    status: "queued" | "importing" | "completed" | "failed";
+    ecosystems: string[];
+    records: number | null;
+    ranges: number | null;
+    newest_modified: string | null;
+    error: string | null;
+    uploaded_by: string;
+    created_at: string;
+    completed_at: string | null;
+  }[];
+};
+
 export type Me = { user_id: string; username: string; roles: string[]; permissions: string[] };

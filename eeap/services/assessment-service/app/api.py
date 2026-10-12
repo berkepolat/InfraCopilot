@@ -237,6 +237,79 @@ async def get_import(import_id: uuid.UUID, _: Principal = Depends(require_permis
     return dict(row)
 
 
+# ------------------------------------------------------------------------------- vulnerability feeds
+
+FEED_FILENAME = r"^[\w.:\- ()]{1,200}$"
+
+
+async def _zip_stream(chunks):
+    head = b""
+    async for chunk in chunks:
+        if len(head) < 4:
+            head += chunk[:4]
+            if len(head) >= 4 and not head.startswith(b"PK\x03\x04"):
+                raise HTTPException(415, detail="the file is not a zip archive")
+        yield chunk
+
+
+@router.post("/vulnerability-feeds", status_code=202)
+async def upload_vulnerability_feed(
+    request: Request,
+    filename: str = Query("all.zip", pattern=FEED_FILENAME, description="original file name, for display"),
+    principal: Principal = Depends(require_permission("assessments:manage")),
+    engine: AsyncEngine = Depends(get_engine),
+    store: ObjectStore = Depends(get_store),
+):
+    """Uploads an OSV all.zip (Alpine, Debian, Ubuntu, Rocky Linux, AlmaLinux); imported asynchronously."""
+    from .storage import ObjectTooLarge
+    from .vuln_feeds import FEED_EVENT
+
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if content_type not in ("application/zip", "application/x-zip-compressed", "application/octet-stream"):
+        raise HTTPException(415, detail="upload the OSV all.zip with Content-Type application/zip")
+    if int(request.headers.get("content-length") or 0) > settings.vuln_feed_max_bytes:
+        raise HTTPException(413, detail="feed file too large")
+    feed_id = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    object_key = f"vuln-feeds/{now:%Y/%m}/{feed_id}.zip"
+    try:
+        size, sha256 = await store.put_stream(
+            settings.imports_bucket, object_key, _zip_stream(request.stream()), "application/zip",
+            {"feed-id": feed_id, "uploaded-by": principal.subject}, settings.vuln_feed_max_bytes)
+    except ObjectTooLarge as exc:
+        raise HTTPException(413, detail="feed file too large") from exc
+    if size == 0:
+        raise HTTPException(422, detail="feed file is empty")
+
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "INSERT INTO assessment.vuln_feeds (feed_id, filename, bucket, object_key, sha256, size_bytes, "
+            "uploaded_by) VALUES (CAST(:id AS uuid), :name, :bucket, :key, :sha, :size, :by)"),
+            {"id": feed_id, "name": filename, "bucket": settings.imports_bucket, "key": object_key, "sha": sha256,
+             "size": size, "by": principal.subject})
+        await enqueue_event(conn, SCHEMA, IMPORT_STREAM, new_envelope(
+            event_type=FEED_EVENT, source=settings.service_name, subject=feed_id,
+            actor={"type": "user", "id": principal.subject},
+            data={"feed_id": feed_id, "size_bytes": size}))
+    return {"feed_id": feed_id, "status": "queued", "sha256": sha256, "size_bytes": size}
+
+
+@router.get("/vulnerability-feeds")
+async def list_vulnerability_feeds(_: Principal = Depends(require_permission("assessments:read")),
+                                   engine: AsyncEngine = Depends(get_engine)):
+    """Imported distributions with data age, and the most recent uploads."""
+    async with engine.connect() as conn:
+        ecosystems = [dict(r) for r in (await conn.execute(text(
+            "SELECT e.ecosystem, e.ranges, e.newest_modified, e.imported_at, e.feed_id, f.filename "
+            "FROM assessment.vuln_ecosystems e JOIN assessment.vuln_feeds f USING (feed_id) "
+            "ORDER BY e.ecosystem"))).mappings()]
+        feeds = [dict(r) for r in (await conn.execute(text(
+            "SELECT feed_id, filename, sha256, size_bytes, status, ecosystems, records, ranges, newest_modified, "
+            "error, uploaded_by, created_at, completed_at FROM assessment.vuln_feeds "
+            "ORDER BY created_at DESC LIMIT 20"))).mappings()]
+    return {"ecosystems": ecosystems, "feeds": feeds}
+
+
 # ------------------------------------------------------------------------------------ network services
 
 @router.get("/network-services")

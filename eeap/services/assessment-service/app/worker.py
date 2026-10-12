@@ -12,6 +12,7 @@ from eeap_shared.utils.events import enqueue_event, log_only_handler, mark_proce
 from eeap_shared.utils.runtime import Subscription
 from eeap_shared.utils.settings import ServiceSettings
 
+from . import vuln_feeds
 from .config import SCHEMA, AssessmentSettings
 from .domain import ImportFormatError, parse_import
 from .findings_repo import get_finding, load_controls, set_lifecycle, upsert_observations
@@ -36,6 +37,9 @@ async def _fail_import(engine: AsyncEngine, import_id: str, run_id: str, error: 
 
 def import_handler(engine: AsyncEngine, store: ObjectStore, settings: AssessmentSettings):
     async def handle(envelope: dict) -> None:
+        if envelope["type"] == vuln_feeds.FEED_EVENT:
+            await vuln_feeds.import_feed(engine, store, settings, envelope, IMPORTS_GROUP)
+            return
         if envelope["type"] != "import.uploaded":
             return
         data = envelope["data"]

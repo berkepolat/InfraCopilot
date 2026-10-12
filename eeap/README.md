@@ -27,8 +27,9 @@ Windows hosts are checked without credentials for SMB signing, SMBv1, RDP NLA an
 when WinRM credentials are configured, for NTLM, LDAP signing / channel binding, local Administrators
 and endpoint protection through a restricted JEA endpoint ([doc 17](docs/architecture/17-windows-winrm.md)).
 Linux hosts are read over SSH with a key that is locked to one read-only posture command: sshd, updates,
-privileged access, firewall, accounts, kernel settings, file permissions and OS lifecycle
-(**LIN-001 … LIN-008**, [doc 18](docs/architecture/18-linux-ssh.md)).
+privileged access, firewall, accounts, kernel settings, file permissions, OS lifecycle and installed
+packages with known vulnerabilities, matched offline against uploaded OSV data
+(**LIN-001 … LIN-009**, [doc 18](docs/architecture/18-linux-ssh.md)).
 AD runs also feed the exposure graph; the Relationship Engine computes Tier-0 reachability and
 risk concentration areas, which drive the propagation factor R of the risk score
 ([doc 13](docs/architecture/13-graph-analytics.md)). Correlation rules combine open findings and
@@ -138,7 +139,9 @@ in `.env`, put the password in `secrets/winrm_password` and recreate the assessm
 For Linux hosts, install `secrets/linux_ssh_key.pub` on each target with
 `infrastructure/linux/install-eeap-posture.sh`, set `LINUX_SSH_USERNAME=eeap-scan` and recreate the
 assessment containers ([doc 18](docs/architecture/18-linux-ssh.md)). The lab already does this for
-`lab-legacy`.
+`lab-legacy`. For LIN-009, download the OSV archive of each distribution in use (e.g.
+`https://osv-vulnerabilities.storage.googleapis.com/Debian/all.zip`) and upload it on
+**Assess → Vulnerability data**; repeat monthly.
 
 For development there is a Samba AD **test lab** seeded with configuration weaknesses
 (never use it outside development):

@@ -5,7 +5,8 @@ import fnmatch
 from datetime import date, datetime, timedelta
 from typing import Any
 
-LINUX_CONTROLS = tuple(f"LIN-{n:03d}" for n in range(1, 9))
+LINUX_CONTROLS = tuple(f"LIN-{n:03d}" for n in range(1, 10))
+VULN_DATA_MAX_AGE_DAYS = 30
 EOL_WARNING = timedelta(days=180)
 METADATA_MAX_AGE_DAYS = 30
 MAX_AUTH_TRIES = 6
@@ -282,10 +283,41 @@ def lin008_lifecycle(ctx, now: datetime) -> None:
                  os=name, end_of_support=eol.isoformat())
 
 
+def lin009_vulnerable_packages(ctx) -> None:
+    probe = ctx.host["probes"].get("linux") or {}
+    data = probe.get("vulnerabilities") or {}
+    if data.get("status") != "ok":
+        return  # no package inventory, unsupported distribution or no uploaded data for this release
+    for group in data["vulnerable"]:
+        cves = group["cves"]
+        listed = ", ".join(cves[:5]) + (f" and {len(cves) - 5} more" if len(cves) > 5 else "")
+        ctx.emit("LIN-009", "FAIL", subject=f"pkg:{group['package']}", severity=group["severity"],
+                 summary=(f"{ctx.ip}: {group['package']} {group['installed']} has {group['advisory_count']} known "
+                          f"vulnerabilities fixed in {group['fixed_version']}" + (f" ({listed})" if cves else "")),
+                 ecosystem=data["ecosystem"], data_as_of=data["data_as_of"],
+                 **{k: v for k, v in group.items() if k != "severity"})
+    if not data["vulnerable"]:
+        ctx.emit("LIN-009", "PASS", subject="packages",
+                 summary=f"{ctx.ip}: no known vulnerabilities with an available fix in "
+                         f"{data['packages_checked']} installed packages ({data['ecosystem']})",
+                 ecosystem=data["ecosystem"], data_as_of=data["data_as_of"])
+    age = data["data_age_days"]
+    if age > VULN_DATA_MAX_AGE_DAYS:
+        ctx.emit("LIN-009", "WARNING", subject="vuln-data", severity="Low",
+                 summary=f"{ctx.ip}: vulnerability data for {data['ecosystem']} is {age} days old; "
+                         "upload a current OSV file", ecosystem=data["ecosystem"], data_as_of=data["data_as_of"])
+    else:
+        ctx.emit("LIN-009", "PASS", subject="vuln-data",
+                 summary=f"{ctx.ip}: vulnerability data for {data['ecosystem']} is {age} days old",
+                 ecosystem=data["ecosystem"], data_as_of=data["data_as_of"])
+
+
 def unassessed(host: dict, selected: list[str]) -> list[str]:
     """Linux controls that could not be evaluated on this host (their open findings stay open)."""
     probe = host["probes"].get("linux")
     if probe is not None and probe.get("status") == "ok":
+        if (probe.get("vulnerabilities") or {}).get("status") != "ok" and "LIN-009" in selected:
+            return ["LIN-009"]
         return []
     return [c for c in selected if c in LINUX_CONTROLS]
 

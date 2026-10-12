@@ -1,11 +1,13 @@
 # Lab target with legacy remote access services and Linux misconfigurations for NET-006 / NET-007,
-# WIN-001 / WIN-002 and LIN-001 … LIN-008 demonstrations. Build context: ./infrastructure.
+# WIN-001 / WIN-002 and LIN-001 … LIN-009 demonstrations. Build context: ./infrastructure.
 #
 # Only the EEAP scanner key can log in, and only to the forced read-only posture command (installed at
 # start from /run/secrets/linux_ssh_key_pub). The weak settings below cannot be used to log in: root and
 # legacy-admin have no usable password, legacy-svc / toor have no shell, empty passwords are not
 # permitted by sshd, telnetd runs /bin/false, vsftpd has no logins and Samba has no shares or users.
-FROM alpine:3.20
+# The base is pinned to the first 3.20 point release so its openssl, musl, zlib and busybox stay at
+# versions with published fixes (LIN-009).
+FROM alpine:3.20.0
 
 RUN apk add --no-cache openssh-server vsftpd busybox-extras samba sudo \
     && ssh-keygen -A \

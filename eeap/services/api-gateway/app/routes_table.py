@@ -12,6 +12,8 @@ class Route:
     permissions: dict[str, str]
     overrides: tuple[tuple[str, re.Pattern[str], str], ...] = field(default_factory=tuple)
     max_body_bytes: int | None = None  # None = gateway default
+    # Forward POST/PUT bodies as a stream instead of buffering them (large uploads).
+    stream_body: bool = False
     # method -> upstreams the service may read on the user's behalf during this request (ADR-0016)
     delegate: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # method -> extra per-user rate limit, e.g. "20/hour"
@@ -53,6 +55,8 @@ ROUTES: tuple[Route, ...] = (
     Route("/integrations", "assessment", {m: "integrations:manage" for m in ("GET", "POST", "PATCH", "DELETE")}),
     Route("/imports", "assessment", {"GET": "imports:create", "POST": "imports:create"},
           max_body_bytes=50 * 1024 * 1024),
+    Route("/vulnerability-feeds", "assessment", {"GET": "assessments:read", "POST": "assessments:manage"},
+          max_body_bytes=1024 * 1024 * 1024, stream_body=True),
     Route("/graph", "relationship", {"GET": "graph:read"}),
     Route("/risk", "ai", {"GET": "risk:read", "POST": "risk:manage", "PATCH": "risk:manage"}),
     Route("/reports", "reporting", {"GET": "reports:read", "POST": "reports:create"},

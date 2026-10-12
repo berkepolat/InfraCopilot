@@ -6,13 +6,14 @@ import hashlib
 import json
 import logging
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from eeap_shared.utils.events import enqueue_event, mark_processed, new_envelope
 
+from . import vuln_feeds
 from .ad_relationships import build_relationships
 from .collectors.ad_ldap import AdCollectionError, collect as collect_ad
 from .collectors import port_scan, ssh_posture, web_probe, winrm_posture
@@ -297,6 +298,9 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
                 pins = await load_ssh_pins(conn, ssh_ips, linux_target.port)
         linux_hosts = await asyncio.to_thread(
             ssh_posture.collect_hosts, ssh_ips, linux_target, pins, concurrency=settings.linux_ssh_concurrency)
+        if "LIN-009" in control_ids:
+            async with engine.connect() as conn:
+                await vuln_feeds.attach_vulnerabilities(conn, linux_hosts, datetime.now(UTC))
     probe_controls = [c for c in control_ids if c not in net_controls.PORT_SCAN_CONTROLS
                       and c not in win_host.WINRM_CONTROLS and c not in linux_host.LINUX_CONTROLS]
     snapshot = await asyncio.to_thread(
@@ -373,6 +377,13 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
                                                 observed_at=observed_at)
             stats.update(ssh_assessed=len(linux_hosts) - len(failures), ssh_failed=failures,
                          ssh_skipped=len(ips) - len(linux_hosts), ssh_host_keys_pinned=pinned)
+            if "LIN-009" in control_ids:
+                coverage = Counter((r.get("vulnerabilities") or {}).get("status", "no-inventory")
+                                   for r in linux_hosts.values() if r["status"] == "ok")
+                stats["package_vulnerabilities"] = {
+                    "hosts": dict(coverage),
+                    "vulnerable_packages": sum(len(r["vulnerabilities"]["vulnerable"]) for r in linux_hosts.values()
+                                               if (r.get("vulnerabilities") or {}).get("status") == "ok")}
         await _finish(engine, settings, run_id, "partially_completed" if rejected else "completed", stats,
                       envelope, conn=conn, full_scope=False)
     logger.info("NET assessment run completed", extra={"run_id": run_id, "targets": len(ips),

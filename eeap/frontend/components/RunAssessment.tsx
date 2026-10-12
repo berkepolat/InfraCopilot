@@ -75,7 +75,8 @@ export function RunAssessment() {
             SMB signing, SMBv1, RDP NLA and WinRM listeners (WIN-001, 002, 006, 008). If WinRM credentials
             are configured on the server, Windows hosts are also read through the restricted EEAP.Posture JEA
             endpoint (WIN-003, 004, 005, 007, 009), and Linux hosts with an SSH scanner key run one
-            read-only posture command (LIN-001 … LIN-008); checks without configured access are skipped.
+            read-only posture command (LIN-001 … LIN-009, known vulnerable packages need uploaded
+            vulnerability data); checks without configured access are skipped.
           </p>
           <label className="field-label" htmlFor="net-targets">Target IPs</label>
           <textarea

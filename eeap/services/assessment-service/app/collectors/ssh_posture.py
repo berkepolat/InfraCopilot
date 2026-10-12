@@ -19,9 +19,9 @@ from ..config import LinuxSshTarget
 COLLECTOR_ID = "linux.ssh_posture"
 COLLECTOR_VERSION = "1.0"
 POSTURE_SCHEMA = "eeap.linux.posture/1"
-MAX_OUTPUT_BYTES = 512 * 1024
+MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 LIST_KEYS = {("accounts", "uid0"), ("accounts", "empty_password"), ("sudo", "group_member"),
-             ("sudo", "nopasswd"), ("files", "mode"), ("files", "world_writable")}
+             ("sudo", "nopasswd"), ("files", "mode"), ("files", "world_writable"), ("packages", "pkg")}
 RSA_ALGORITHMS = ["rsa-sha2-512", "rsa-sha2-256", "ssh-rsa"]
 
 

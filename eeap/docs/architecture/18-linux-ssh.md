@@ -1,4 +1,4 @@
-# 18 — Linux host posture over SSH (LIN-001 … LIN-008)
+# 18 — Linux host posture over SSH (LIN-001 … LIN-009)
 
 Network runs ([doc 12](12-net-assessment.md)) can read the configuration of Linux hosts over SSH.
 The scanner key is accepted only with a **forced command**: whatever the client asks for, sshd runs
@@ -16,9 +16,10 @@ sequenceDiagram
     W->>H: SSH key exchange
     W->>W: verify host key (known_hosts or pin) before authenticating
     W->>H: public-key auth as eeap-scan, exec
-    H->>H: sudo -n eeap-posture (reads sshd -T, package manager, accounts, sudoers, firewall, sysctl, file modes)
+    H->>H: sudo -n eeap-posture (reads sshd -T, package manager, accounts, sudoers, firewall, sysctl, file modes, installed packages)
     H-->>W: records eeap.linux.posture/1
-    W->>W: evaluate LIN-001..008 (controls/linux_host.py)
+    W->>DB: fixed-version ranges for the installed packages (assessment.vuln_ranges)
+    W->>W: evaluate LIN-001..009 (controls/linux_host.py)
     W->>DB: pin keys seen for the first time
 ```
 
@@ -46,9 +47,42 @@ sequenceDiagram
 | LIN-006 Kernel hardening | `/proc/sys` | ASLR not 2, source routing, `fs.protected_*` off: WARNING Medium; redirects, SYN cookies off, `kptr_restrict` / `dmesg_restrict` 0, `suid_dumpable`, `ptrace_scope` 0: WARNING Low |
 | LIN-007 Sensitive file permissions | `stat` of passwd, group, shadow, gshadow, sudoers, sshd_config; world-writable files in `/etc` | Shadow readable by others or passwd / sudoers world-writable: FAIL High; other issues: FAIL Medium |
 | LIN-008 OS lifecycle | `/etc/os-release` | Past end of free security support: FAIL High; within 180 days: WARNING Medium; unknown release: not evaluated |
+| LIN-009 Known vulnerable packages | installed packages (dpkg, rpm, apk) against uploaded OSV data | One FAIL per source package with a fixed version available (`pkg:<name>`, severity of its worst advisory); data older than 30 days: WARNING Low (`vuln-data`); no data for the release: not evaluated |
 
 LIN-008 knows Alpine, Ubuntu LTS, Debian, RHEL and rebuilds (Rocky, AlmaLinux, Oracle Linux), CentOS
 (Linux and Stream) and Amazon Linux; extended paid support (ESM, ELS) is not considered.
+
+## Known vulnerable packages (LIN-009)
+
+The posture output lists installed packages (`packages pkg <name> <version> <source> [<source version>]`).
+They are matched offline against OSV data that an administrator uploads
+([ADR-0019](../adr/0019-offline-osv-package-vulnerabilities.md)); the platform never contacts the
+internet and the inventory never leaves it.
+
+1. On a computer with internet access download the family archive of each distribution in use:
+
+   | Distribution | Archive (≈ size) |
+   |---|---|
+   | Debian | `https://osv-vulnerabilities.storage.googleapis.com/Debian/all.zip` (75 MB) |
+   | Ubuntu | `https://osv-vulnerabilities.storage.googleapis.com/Ubuntu/all.zip` (750 MB) |
+   | Alpine | `https://osv-vulnerabilities.storage.googleapis.com/Alpine/all.zip` (4 MB) |
+   | Rocky Linux | `https://osv-vulnerabilities.storage.googleapis.com/Rocky%20Linux/all.zip` (5 MB) |
+   | AlmaLinux | `https://osv-vulnerabilities.storage.googleapis.com/AlmaLinux/all.zip` (6 MB) |
+
+   Do not use the per-release folders (`Debian:12`, `Ubuntu:22.04:LTS`, `Alpine:v3.20`): OSV stopped
+   updating them in October 2024.
+2. Upload each file unchanged on **Assess → Vulnerability data** (or `POST /api/v1/vulnerability-feeds`,
+   `assessments:manage`, up to 1 GiB). The worker imports it in the background; the page shows the
+   releases, the number of fixed-version ranges and the data date. A new upload replaces the data of the
+   releases it covers.
+3. Repeat at least monthly; LIN-009 warns (`vuln-data`) when a release's data is older than 30 days.
+
+Matching uses the distribution's version ordering (dpkg, rpm, apk) and the source package (Debian,
+Ubuntu, Alpine) or binary package (Rocky, AlmaLinux) names used by the advisories. Only advisories with a
+fixed version are reported. Severity comes from the distribution's rating, else the CVSS v3 base score.
+Hosts with an older posture script (no package list), an unsupported distribution or no uploaded data for
+their release are not evaluated and keep their open LIN-009 findings; run stats show
+`package_vulnerabilities` per status.
 
 ## Target setup
 
@@ -90,9 +124,10 @@ requesting them explicitly returns 422.
 
 ## Lab
 
-`lab-legacy` (Alpine 3.20) installs the posture command at start with `secrets/linux_ssh_key.pub` and
+`lab-legacy` (Alpine 3.20.0) installs the posture command at start with `secrets/linux_ssh_key.pub` and
 ships deliberate weaknesses: root and password logins with a CBC cipher, `MaxAuthTries 10`, a NOPASSWD
 sudo rule for `wheel`, an extra UID 0 account without a shell, a service account with an empty password
-and no shell, and a world-writable file in `/etc`. None of them allow a login. Expected result: LIN-001,
-003, 004, 005, 007 and 008 FAIL, LIN-006 depends on the Docker host kernel, LIN-002 is not evaluated
-(no package index in the image).
+and no shell, a world-writable file in `/etc`, and base packages from the first 3.20 point release.
+None of them allow a login. Expected result: LIN-001, 003, 004, 005, 007 and 008 FAIL, LIN-006 depends on
+the Docker host kernel, LIN-002 is not evaluated (no package index in the image). After uploading
+`Alpine/all.zip`, LIN-009 reports openssl (Critical), musl and zlib (High).

@@ -443,6 +443,7 @@ def evaluate(snapshot: dict, control_ids: list[str] | None, now: datetime, *,
         "WIN-009": lambda ctx: win_host.win009_endpoint_protection(ctx, now),
         "LIN-003": lambda ctx: linux_host.lin003_privileged(ctx, linux_admins_allowed or []),
         "LIN-008": lambda ctx: linux_host.lin008_lifecycle(ctx, now),
+        "LIN-009": linux_host.lin009_vulnerable_packages,
     }
     observations: list[ImportRow] = []
     unassessed: dict[str, list[str]] = {}

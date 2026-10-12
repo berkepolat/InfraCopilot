@@ -14,6 +14,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
       { href: "/network", label: "Network services", permission: "assets:read" },
       { href: "/assets", label: "Assets", permission: "assets:read" },
       { href: "/controls", label: "Controls", permission: "controls:read" },
+      { href: "/vulnerability-data", label: "Vulnerability data", permission: "assessments:read" },
     ],
   },
   {

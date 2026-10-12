@@ -20,6 +20,15 @@ _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 DELEGATION_HEADER = "x-eeap-delegation"
 
 
+async def _limited_stream(request: Request, max_body: int):
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > max_body:
+            raise HTTPException(413, detail="request body too large")
+        yield chunk
+
+
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
 async def proxy(path: str, request: Request, state: GatewayState = Depends(gateway_state)):
     upstream_path = "/" + path
@@ -56,9 +65,12 @@ async def proxy(path: str, request: Request, state: GatewayState = Depends(gatew
     content_length = int(request.headers.get("content-length") or 0)
     if content_length > max_body:
         raise HTTPException(413, detail="request body too large")
-    body = await request.body()
-    if len(body) > max_body:
-        raise HTTPException(413, detail="request body too large")
+    if route.stream_body and method in ("POST", "PUT"):
+        body = _limited_stream(request, max_body)
+    else:
+        body = await request.body()
+        if len(body) > max_body:
+            raise HTTPException(413, detail="request body too large")
 
     upstreams = state.settings.upstreams()
     audience, base_url = upstreams[route.upstream]

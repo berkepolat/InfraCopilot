@@ -48,6 +48,7 @@ class AssessmentSettings(ServiceSettings):
     minio_secret_key_file: str | None = None
     import_max_bytes: int = 50 * 1024 * 1024
     import_max_rows: int = 20_000
+    vuln_feed_max_bytes: int = 1024 * 1024 * 1024
     risk_acceptance_max_days: int = 365
 
     ad_ldap_url: str | None = None

@@ -131,4 +131,20 @@ for f in /etc/passwd /etc/group /etc/shadow /etc/gshadow /etc/ssh/sshd_config /e
 done
 find /etc -xdev -type f -perm -0002 2>/dev/null | head -n 50 | while IFS= read -r f; do rec files world_writable "$f"; done
 
+# ---------------------------------------------------------------- installed packages (name version source [source_version])
+if have dpkg-query; then
+  rec packages format dpkg
+  dpkg-query -W -f '${db:Status-Abbrev}\t${Package}\t${Version}\t${source:Package}\t${source:Version}\n' 2>/dev/null |
+    awk -F '\t' '$1 ~ /^.i/ {printf "packages\tpkg\t%s %s %s %s\n", $2, $3, ($4 == "" ? $2 : $4), ($5 == "" ? $3 : $5)}'
+elif have rpm; then
+  rec packages format rpm
+  rpm -qa --qf '%{NAME} %{EPOCH}:%{VERSION}-%{RELEASE} %{SOURCERPM}\n' 2>/dev/null |
+    awk 'NF >= 2 {printf "packages\tpkg\t%s\n", $0}'
+elif [ -r /lib/apk/db/installed ]; then
+  rec packages format apk
+  awk -F: '/^P:/ {p = $2} /^V:/ {v = $2} /^o:/ {o = $2}
+           /^$/ {if (p != "") printf "packages\tpkg\t%s %s %s %s\n", p, v, (o == "" ? p : o), v; p = v = o = ""}
+           END {if (p != "") printf "packages\tpkg\t%s %s %s %s\n", p, v, (o == "" ? p : o), v}' /lib/apk/db/installed
+fi
+
 rec schema complete 1

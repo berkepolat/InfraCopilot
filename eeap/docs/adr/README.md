@@ -24,3 +24,4 @@ ADRs are immutable once accepted; changes are made by a new ADR that supersedes 
 | [0016](0016-delegated-report-reads.md) | Reports read data with gateway-delegated, per-upstream user tokens | Accepted |
 | [0017](0017-winrm-jea-posture-collection.md) | Credentialed Windows posture over WinRM through a JEA endpoint | Accepted |
 | [0018](0018-ssh-forced-command-posture.md) | Linux posture over SSH with a forced, read-only command | Accepted |
+| [0019](0019-offline-osv-package-vulnerabilities.md) | Known vulnerable packages from uploaded OSV data | Accepted |

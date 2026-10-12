@@ -617,6 +617,79 @@ paths:
         '204': {description: Pin removed}
         '404': {description: No pinned key for this address}
         '422': {description: Not an IP address}
+  /vulnerability-feeds:
+    post:
+      tags: [Assessments]
+      x-permission: assessments:manage
+      summary: Upload an OSV all.zip for LIN-009 (streamed, up to 1 GiB); imported asynchronously
+      description: >
+        Upload the family archive unchanged, e.g. https://osv-vulnerabilities.storage.googleapis.com/Debian/all.zip
+        (also Ubuntu, Alpine, Rocky Linux, AlmaLinux). The per-release folders (Debian:12, Ubuntu:22.04:LTS,
+        Alpine:v3.20) are no longer updated by OSV. An import replaces the data of every release the archive
+        covers; the uploaded object is deleted after import.
+      parameters:
+        - {name: filename, in: query, schema: {type: string, maxLength: 200, default: all.zip}}
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema: {type: string, format: binary}
+      responses:
+        '202':
+          description: Stored and queued for import
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  feed_id: {type: string, format: uuid}
+                  status: {type: string, enum: [queued]}
+                  sha256: {type: string}
+                  size_bytes: {type: integer}
+        '413': {description: Larger than 1 GiB}
+        '415': {description: Not a zip archive}
+        '422': {description: Empty body}
+    get:
+      tags: [Assessments]
+      x-permission: assessments:read
+      summary: Imported releases with data date, and the 20 most recent uploads
+      responses:
+        '200':
+          description: Vulnerability data status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ecosystems:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ecosystem: {type: string, example: 'Debian:12'}
+                        ranges: {type: integer}
+                        newest_modified: {type: string, format: date-time, nullable: true}
+                        imported_at: {type: string, format: date-time}
+                        feed_id: {type: string, format: uuid}
+                        filename: {type: string}
+                  feeds:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        feed_id: {type: string, format: uuid}
+                        filename: {type: string}
+                        sha256: {type: string}
+                        size_bytes: {type: integer}
+                        status: {type: string, enum: [queued, importing, completed, failed]}
+                        ecosystems: {type: array, items: {type: string}}
+                        records: {type: integer, nullable: true}
+                        ranges: {type: integer, nullable: true}
+                        newest_modified: {type: string, format: date-time, nullable: true}
+                        error: {type: string, nullable: true}
+                        uploaded_by: {type: string}
+                        created_at: {type: string, format: date-time}
+                        completed_at: {type: string, format: date-time, nullable: true}
   /network-services:
     get:
       tags: [Assessments]

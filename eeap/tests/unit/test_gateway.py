@@ -35,6 +35,10 @@ def test_unroutable_paths(path):
 def test_imports_have_a_larger_body_limit_than_the_default():
     assert resolve("/imports").max_body_bytes == 50 * 1024 * 1024
     assert resolve("/assets").max_body_bytes is None
+    feeds = resolve("/vulnerability-feeds")
+    assert feeds.stream_body and feeds.max_body_bytes == 1024 * 1024 * 1024
+    assert feeds.permission_for("POST", "/vulnerability-feeds") == "assessments:manage"
+    assert not resolve("/imports").stream_body
 
 
 def test_unmapped_method_has_no_permission():
