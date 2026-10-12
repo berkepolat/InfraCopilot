@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -80,34 +81,54 @@ class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     control_ids: list[str] | None = Field(default=None, max_length=50)
+    # When set, runs NET-001..005 probes against these IP addresses (see SCAN_ALLOWED_CIDRS).
+    targets: list[str] | None = Field(default=None, max_length=256)
 
 
 @router.post("/assessments/runs", status_code=202)
 async def start_run(payload: RunRequest, principal: Principal = Depends(require_permission("assessments:run")),
                     engine: AsyncEngine = Depends(get_engine)):
+    from .targets import TargetError, authorize_targets, parse_targets
+
+    module = "NET" if payload.targets else "AD"
+    try:
+        ips = authorize_targets(parse_targets(payload.targets), settings.scan_allowed_cidrs) if module == "NET" else []
+    except TargetError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
     async with engine.begin() as conn:
         enabled = set((await conn.execute(text(
-            "SELECT control_id FROM assessment.controls WHERE enabled AND module = 'AD'"))).scalars())
+            "SELECT control_id FROM assessment.controls WHERE enabled AND module = :module"),
+            {"module": module})).scalars())
         requested = payload.control_ids or sorted(enabled)
         unknown = sorted(set(requested) - enabled)
         if unknown:
-            raise HTTPException(422, detail=f"not an enabled AD control: {', '.join(unknown)}")
+            raise HTTPException(422, detail=f"not an enabled {module} control: {', '.join(unknown)}")
         if not requested:
-            raise HTTPException(422, detail="no AD controls are enabled")
+            raise HTTPException(422, detail=f"no {module} controls are enabled")
+        # Reject mixing modules in one run.
+        prefixes = {c.split("-", 1)[0] for c in requested}
+        if prefixes != {module}:
+            raise HTTPException(422, detail=f"control_ids must all belong to module {module} for this request")
         busy = (await conn.execute(text(
             "SELECT run_id::text FROM assessment.assessment_runs WHERE trigger IN ('manual', 'api', 'schedule') "
             "AND status IN ('queued', 'running') AND created_at > now() - interval '1 hour' LIMIT 1"))).scalar()
         if busy:
             raise HTTPException(409, detail=f"assessment run {busy} is still in progress")
+        scope = {"ips": ips} if ips else {}
+        full_scope = module == "AD"
         run_id = (await conn.execute(
-            text("INSERT INTO assessment.assessment_runs (trigger, control_ids, full_scope, requested_by) "
-                 "VALUES ('manual', :controls, true, :by) RETURNING run_id::text"),
-            {"controls": requested, "by": principal.subject})).scalar_one()
+            text("INSERT INTO assessment.assessment_runs "
+                 "(trigger, control_ids, scope, full_scope, requested_by) "
+                 "VALUES ('manual', :controls, CAST(:scope AS jsonb), :full, :by) RETURNING run_id::text"),
+            {"controls": requested, "scope": json.dumps(scope), "full": full_scope,
+             "by": principal.subject})).scalar_one()
         await enqueue_event(conn, SCHEMA, "eeap.assessment", new_envelope(
             event_type="assessment.run_requested", source=settings.service_name, subject=run_id,
             actor={"type": "user", "id": principal.subject},
-            data={"run_id": run_id, "trigger": "manual", "control_ids": requested}))
-    return {"run_id": run_id, "status": "queued", "control_ids": requested}
+            data={"run_id": run_id, "trigger": "manual", "control_ids": requested, "scope": scope}))
+    return {"run_id": run_id, "status": "queued", "control_ids": requested, "scope": scope,
+            "module": module}
 
 
 @router.get("/assessments/runs/{run_id}")

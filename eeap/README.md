@@ -18,8 +18,9 @@ library, the six services, the frontend, Dockerfiles, health/metrics endpoints, 
 authentication, RBAC, audit logging, rate limiting, internal service tokens and the
 transactional outbox / Redis Streams event pipeline. Findings can be imported and are risk
 scored automatically. **AD-001 … AD-010** are implemented as a read-only LDAPS configuration
-assessment ([doc 11](docs/architecture/11-ad-assessment.md)); WIN-0xx and NET-0xx are
-catalogued and accept imported findings only.
+assessment ([doc 11](docs/architecture/11-ad-assessment.md)). **NET-001 … NET-005** probe an
+explicit IP list authorized by `SCAN_ALLOWED_CIDRS` ([doc 12](docs/architecture/12-net-assessment.md)).
+WIN-0xx remain catalogued and accept imported findings only.
 
 | Deliverable            | Location                                                                 |
 |------------------------|--------------------------------------------------------------------------|
@@ -34,6 +35,7 @@ catalogued and accept imported findings only.
 | Deployment model       | [docs/architecture/09-deployment-model.md](docs/architecture/09-deployment-model.md) |
 | Directory structure    | [docs/architecture/10-directory-structure.md](docs/architecture/10-directory-structure.md) |
 | AD assessment          | [docs/architecture/11-ad-assessment.md](docs/architecture/11-ad-assessment.md) |
+| NET IP assessment      | [docs/architecture/12-net-assessment.md](docs/architecture/12-net-assessment.md) |
 | ADRs                   | [docs/adr/](docs/adr/README.md) |
 | Docker Compose         | [docker-compose.yml](docker-compose.yml), [.env.example](.env.example) |
 
@@ -96,6 +98,16 @@ curl -sk -X POST https://localhost/api/v1/assessments/runs -H "Authorization: Be
 curl -sk "https://localhost/api/v1/assessments/runs?limit=5" -H "Authorization: Bearer $TOKEN"
 ```
 
+### Network IP assessment
+
+Set `SCAN_ALLOWED_CIDRS` in `.env` to the ranges you authorize (e.g. `10.0.0.0/8,172.16.0.0/12`),
+recreate the assessment containers, then scan from the dashboard (**Scan IPs**) or:
+
+```bash
+curl -sk -X POST https://localhost/api/v1/assessments/runs -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"targets":["10.0.0.10","10.0.0.20"]}'
+```
+
 For development there is a Samba AD **test lab** seeded with configuration weaknesses
 (never use it outside development):
 
@@ -116,6 +128,6 @@ Unit and contract tests run in a throwaway container:
 
 ```bash
 docker run --rm -v "$PWD:/src:ro" -w /tmp python:3.12-slim sh -c \
-  "cp -r /src/shared /tmp/shared && pip install -q '/tmp/shared[test]' 'argon2-cffi>=23.1,<26' 'ldap3>=2.9,<3' \
+  "cp -r /src/shared /tmp/shared && pip install -q '/tmp/shared[test]' 'argon2-cffi>=23.1,<26' 'ldap3>=2.9,<3' 'dnspython>=2.6,<3' \
    && cd /src && python -m pytest -q -p no:cacheprovider tests"
 ```

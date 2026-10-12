@@ -81,8 +81,11 @@ export type AssessmentRun = {
   trigger: string;
   status: string;
   control_ids: string[];
+  scope?: { ips?: string[] };
   stats: {
+    module?: string;
     domain?: string;
+    targets?: string[];
     error?: string;
     created?: number;
     updated?: number;

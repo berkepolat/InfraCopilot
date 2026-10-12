@@ -32,6 +32,10 @@ class AssessmentSettings(ServiceSettings):
     ad_timeout_seconds: int = 30
     ad_max_objects: int = 200_000
 
+    # Comma-separated CIDRs that server-side network probes may target (required for NET runs).
+    scan_allowed_cidrs: str | None = None
+    net_probe_timeout_seconds: float = 3.0
+
     def minio_secret_key(self) -> str:
         return read_secret_file(self.minio_secret_key_file) or ""
 

@@ -1,3 +1,4 @@
 # Service-specific dependencies (common ones come from eeap-shared).
 minio>=7.2,<8
 ldap3>=2.9,<3
+dnspython>=2.6,<3

@@ -53,6 +53,22 @@ button { margin-top: 20px; padding: 10px 16px; border: 0; border-radius: 6px; ba
 button.link { background: none; color: var(--muted); margin: 0; padding: 0; }
 button:disabled { opacity: 0.6; cursor: default; }
 h2 button { margin: 0 0 0 12px; padding: 6px 12px; font-size: 13px; vertical-align: middle; }
+.run-panel { max-width: 420px; margin: 0 0 16px; }
+.run-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px; }
+.run-row button { margin-top: 0; }
+.net-scan { flex-direction: column; align-items: stretch; margin-top: 10px; }
+.net-scan textarea {
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+.run-msg { margin-top: 6px; }
 .error { color: var(--critical); font-size: 14px; margin-top: 12px; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }

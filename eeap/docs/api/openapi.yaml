@@ -476,10 +476,12 @@ paths:
     post:
       tags: [Assessments]
       x-permission: assessments:run
-      summary: Start an AD configuration assessment run
+      summary: Start an AD or NET assessment run
       description: |
-        Runs the enabled AD controls (all of them when `control_ids` is omitted) against the
-        configured domain over read-only LDAPS. Profiles and asset scopes are not implemented yet.
+        Without `targets`, runs enabled AD controls against the configured domain over read-only LDAPS.
+        With `targets` (IP list), runs enabled NET controls as read-only protocol probes against those
+        addresses. Every target must fall inside `SCAN_ALLOWED_CIDRS`. AD and NET cannot be mixed in
+        one request.
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody:
         required: true
@@ -489,7 +491,15 @@ paths:
               type: object
               additionalProperties: false
               properties:
-                control_ids: {type: array, maxItems: 50, items: {type: string, pattern: '^AD-[0-9]{3}$'}}
+                control_ids:
+                  type: array
+                  maxItems: 50
+                  items: {type: string, pattern: '^(AD|NET)-[0-9]{3}$'}
+                targets:
+                  type: array
+                  maxItems: 256
+                  description: IP addresses to probe (NET module). Required for network scans.
+                  items: {type: string, minLength: 1, maxLength: 64}
       responses:
         '202':
           description: Run queued
@@ -501,8 +511,13 @@ paths:
                   run_id: {type: string, format: uuid}
                   status: {type: string, enum: [queued]}
                   control_ids: {type: array, items: {type: string}}
+                  module: {type: string, enum: [AD, NET]}
+                  scope:
+                    type: object
+                    properties:
+                      ips: {type: array, items: {type: string}}
         '409': {description: Another run is still queued or running}
-        '422': {description: A requested control is not an enabled AD control}
+        '422': {description: Invalid targets, missing SCAN_ALLOWED_CIDRS, or control not enabled}
   /assessments/runs/{run_id}:
     get:
       tags: [Assessments]

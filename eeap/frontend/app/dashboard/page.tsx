@@ -19,7 +19,11 @@ function runSummary(run: AssessmentRun): string {
   if (s.error) return s.error;
   if (run.trigger === "import") return `${s.accepted ?? 0} accepted, ${s.rejected ?? 0} rejected`;
   if (s.created === undefined) return "";
-  return `${s.domain ?? ""} · ${s.created} new, ${s.updated ?? 0} changed, ${s.resolved ?? 0} resolved`;
+  if (s.module === "NET" || (s.targets && s.targets.length)) {
+    const n = s.targets?.length ?? 0;
+    return `NET · ${n} IP${n === 1 ? "" : "s"} · ${s.created} new, ${s.updated ?? 0} changed, ${s.resolved ?? 0} resolved`;
+  }
+  return `${s.domain ?? "AD"} · ${s.created} new, ${s.updated ?? 0} changed, ${s.resolved ?? 0} resolved`;
 }
 
 export const dynamic = "force-dynamic";
@@ -97,7 +101,8 @@ export default async function Dashboard() {
           <div className="card"><div className="label">Tier-0 assets</div><div className="value">{assets ? tier0 : "—"}</div></div>
         </div>
 
-        <h2>Assessments {canRun && <RunAssessment />}</h2>
+        <h2>Assessments</h2>
+        {canRun && <RunAssessment />}
         {runs === null ? <p className="muted">You do not have permission to view assessment runs.</p> : (
           <table>
             <thead><tr><th>Started</th><th>Trigger</th><th>Status</th><th>Result</th></tr></thead>
@@ -162,7 +167,9 @@ export default async function Dashboard() {
                 <tr key={c.control_id}>
                   <td>{c.control_id}</td><td>{c.name}</td><td>{c.module}</td><td>{c.category}</td>
                   <td><span className={`badge ${c.default_severity}`}>{c.default_severity}</span></td>
-                  <td className="muted">{c.enabled ? (c.module === "AD" ? "LDAP (read-only)" : "Enabled") : "Import only"}</td>
+                  <td className="muted">{c.enabled
+                    ? (c.module === "AD" ? "LDAP (read-only)" : c.module === "NET" ? "IP probes (read-only)" : "Enabled")
+                    : "Import only"}</td>
                 </tr>
               ))}
             </tbody>

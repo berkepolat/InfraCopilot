@@ -51,7 +51,7 @@ eeap/
 │   └── lab/samba-dc/                # development-only Samba AD test lab (docker-compose.lab.yml)
 │
 ├── docs/
-│   ├── architecture/                # 01–11 architecture documents
+│   ├── architecture/                # 01–12 architecture documents
 │   ├── adr/                         # architecture decision records
 │   └── api/openapi.yaml             # public API contract
 │
