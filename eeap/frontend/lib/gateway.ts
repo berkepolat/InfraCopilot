@@ -197,6 +197,7 @@ export type NetworkService = {
   details: Record<string, unknown>;
   first_seen_at: string;
   last_seen_at: string;
+  closed_at: string | null;
 };
 
 export type Me = { user_id: string; username: string; roles: string[]; permissions: string[] };

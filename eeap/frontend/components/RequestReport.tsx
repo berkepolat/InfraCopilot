@@ -52,8 +52,9 @@ export function RequestReport() {
   }
 
   return (
-    <div className="run-panel">
-      <div className="run-row">
+    <div className="panel">
+      <h3>New report</h3>
+      <div className="inline-form">
         <select value={reportType} onChange={(event) => setReportType(event.target.value)} disabled={busy}>
           {REPORT_TYPES.map((t) => (
             <option key={t.id} value={t.id}>{t.label}</option>
@@ -69,7 +70,7 @@ export function RequestReport() {
           {busy ? "Generating…" : "Generate report"}
         </button>
       </div>
-      {message && <div className="muted small run-msg">{message}</div>}
+      {message && <div className="notice">{message}</div>}
     </div>
   );
 }
