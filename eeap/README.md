@@ -42,6 +42,9 @@ graph facts and network exposure into risk scenarios — including host-level ch
 a KEV-listed vulnerability — shown stage by stage with ATT&CK tactics and the fixes that break each chain
 ([doc 14](docs/architecture/14-correlation.md)), which feed a
 prioritized remediation roadmap and an ATT&CK exposure view ([doc 15](docs/architecture/15-remediation-mitre.md)).
+A fix can be confirmed with a targeted reassessment of just the affected controls and hosts; each finding is
+marked verified, still failing or inconclusive
+([ADR-0022](docs/adr/0022-fix-verification-by-targeted-reassessment.md)).
 Executive, technical, roadmap and ATT&CK reports are rendered as PDF, HTML and JSON with the
 requester's permissions ([doc 16](docs/architecture/16-reporting.md)).
 WIN-0xx remain catalogued and accept imported findings only.

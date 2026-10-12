@@ -167,8 +167,26 @@ export type RemediationItem = {
   roadmap_phase: "Immediate" | "Short-term" | "Medium-term" | "Long-term";
   status: "proposed" | "accepted" | "done" | "rejected";
   open_findings: number;
+  finding_ids: string[];
   scenarios: { scenario_id: string; title: string }[];
   techniques: { technique_id: string; name: string }[];
+};
+
+export type FixVerification = {
+  verification_id: string;
+  finding_id: string;
+  run_id: string | null;
+  status: "pending" | "verified" | "still_failing" | "inconclusive" | "failed";
+  requested_by: string;
+  note: string | null;
+  requested_at: string;
+  completed_at: string | null;
+  observed_status: string | null;
+  summary: string | null;
+  control_id: string;
+  asset_id: string;
+  subject_key: string;
+  lifecycle_state: string;
 };
 
 export type MitreTechnique = {

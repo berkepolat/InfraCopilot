@@ -77,6 +77,6 @@ export function runSummary(run: AssessmentRun): string {
 
 export function runModule(run: AssessmentRun): string {
   if (run.trigger === "import") return "Import";
-  if (run.stats.module === "NET" || run.scope?.ips?.length) return "Network";
-  return "Active Directory";
+  const module = run.stats.module === "NET" || run.scope?.ips?.length ? "Network" : "Active Directory";
+  return run.trigger === "verification" ? `${module} · fix verification` : module;
 }

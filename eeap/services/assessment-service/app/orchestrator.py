@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from eeap_shared.utils.events import enqueue_event, mark_processed, new_envelope
 
-from . import vuln_feeds
+from . import verification, vuln_feeds
 from .ad_relationships import build_relationships
 from .collectors.ad_ldap import AdCollectionError, collect as collect_ad
 from .collectors import port_scan, ssh_posture, web_probe, winrm_posture
@@ -122,6 +122,8 @@ def run_handler(engine: AsyncEngine, store: ObjectStore, settings: AssessmentSet
 async def _finish(engine: AsyncEngine, settings: AssessmentSettings, run_id: str, status: str, stats: dict,
                   envelope: dict, conn: AsyncConnection | None = None, *, full_scope: bool = True) -> None:
     async def write(c: AsyncConnection) -> None:
+        if verified := await verification.complete_verifications(c, run_id, status):
+            stats["verifications"] = verified
         await c.execute(text("UPDATE assessment.assessment_runs SET status = :st, stats = CAST(:s AS jsonb), "
                              "completed_at = now() WHERE run_id = CAST(:r AS uuid)"),
                         {"st": status, "s": json.dumps(stats), "r": run_id})

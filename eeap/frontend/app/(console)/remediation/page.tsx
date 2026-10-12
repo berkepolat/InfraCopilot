@@ -1,16 +1,26 @@
-import { gatewayFetch, type RemediationItem } from "@/lib/gateway";
-import { NoAccess, PageHeader, optional } from "@/lib/ui";
+import { VerifyFix } from "@/components/VerifyFix";
+import { gatewayFetch, type FixVerification, type RemediationItem } from "@/lib/gateway";
+import { EmptyRow, NoAccess, PageHeader, Section, formatDate, getMe, optional } from "@/lib/ui";
 
 export const dynamic = "force-dynamic";
 
 const PHASES: RemediationItem["roadmap_phase"][] = ["Immediate", "Short-term", "Medium-term", "Long-term"];
+const VERIFICATION_LABELS: Record<FixVerification["status"], string> = {
+  pending: "pending", verified: "verified", still_failing: "still failing", inconclusive: "inconclusive",
+  failed: "run failed",
+};
 
 export default async function RemediationPage() {
-  const roadmap = await optional(() => gatewayFetch<{ items: RemediationItem[] }>("/api/v1/risk/remediation?limit=100"));
+  const [me, roadmap, verifications] = await Promise.all([
+    getMe(),
+    optional(() => gatewayFetch<{ items: RemediationItem[] }>("/api/v1/risk/remediation?limit=100")),
+    optional(() => gatewayFetch<{ items: FixVerification[] }>("/api/v1/assessments/verifications?limit=20")),
+  ]);
+  const canVerify = me.permissions.includes("assessments:run");
   const header = (
     <PageHeader
       title="Remediation roadmap"
-      description="One action per weak control, ordered by phase and by expected risk reduction per unit of effort."
+      description="One action per weak control, ordered by phase and by expected risk reduction per unit of effort. After fixing, verify the fix with a targeted reassessment."
     />
   );
   if (roadmap === null) return <>{header}<NoAccess what="the remediation roadmap" /></>;
@@ -38,6 +48,9 @@ export default async function RemediationPage() {
                         {i.control_id} · {i.open_findings} open finding{i.open_findings === 1 ? "" : "s"}
                         {i.techniques.length > 0 && ` · ATT&CK ${i.techniques.map((t) => t.technique_id).join(", ")}`}
                       </div>
+                      {canVerify && i.finding_ids.length > 0 && (
+                        <VerifyFix findingIds={i.finding_ids} label={i.finding_ids.length > 50 ? "Verify fix (first 50)" : "Verify fix"} />
+                      )}
                     </td>
                     <td>{i.effort}</td>
                     <td><div className="bar"><span style={{ width: `${Math.min(100, i.expected_risk_reduction)}%` }} /></div>{i.expected_risk_reduction}%</td>
@@ -53,7 +66,31 @@ export default async function RemediationPage() {
       {roadmap.items.length > 0 && (
         <p className="muted small">
           Risk reduction is the share of current open finding and scenario scores removed by fixing the control.
+          Verify fix reassesses only the affected controls and hosts; findings that are no longer observed are
+          resolved and recorded as verified.
         </p>
+      )}
+
+      {verifications !== null && (
+        <Section title="Recent fix verifications">
+          <table>
+            <thead><tr><th>Requested</th><th>Finding</th><th>Result</th><th>Finding state</th></tr></thead>
+            <tbody>
+              {verifications.items.length === 0 && <EmptyRow colSpan={4}>No fix verifications yet.</EmptyRow>}
+              {verifications.items.map((v) => (
+                <tr key={v.verification_id}>
+                  <td className="small">{formatDate(v.requested_at)}<div className="muted">{v.requested_by}</div></td>
+                  <td>{v.control_id}<div className="muted small wrap">{v.asset_id} · {v.subject_key || "—"}</div></td>
+                  <td>
+                    <span className={`status verification-${v.status}`}>{VERIFICATION_LABELS[v.status]}</span>
+                    {v.summary && <div className="muted small">{v.summary}</div>}
+                  </td>
+                  <td className="muted">{v.lifecycle_state.replace("_", " ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
       )}
     </>
   );

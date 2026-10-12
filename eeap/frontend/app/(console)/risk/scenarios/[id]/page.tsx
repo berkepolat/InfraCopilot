@@ -2,8 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Fragment } from "react";
 import { GatewayError, gatewayFetch, type ScenarioDetail, type ScenarioFinding, type ScenarioStage } from "@/lib/gateway";
+import { VerifyFix } from "@/components/VerifyFix";
 import { EXPOSURE_CLASS_LABELS, TACTIC_LABELS } from "@/lib/risk";
-import { EmptyRow, NoAccess, PageHeader, Section, formatDate, optional } from "@/lib/ui";
+import { EmptyRow, NoAccess, PageHeader, Section, formatDate, getMe, optional } from "@/lib/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,8 @@ async function load(id: string): Promise<ScenarioDetail | null> {
 
 export default async function ScenarioPage({ params }: { params: { id: string } }) {
   if (!UUID.test(params.id)) notFound();
-  const scenario = await load(params.id);
+  const [me, scenario] = await Promise.all([getMe(), load(params.id)]);
+  const canVerify = me.permissions.includes("assessments:run");
   if (scenario === null) return <><PageHeader title="Attack scenario" /><NoAccess what="risk scenarios" /></>;
 
   const byId = new Map(scenario.findings.map((f) => [f.finding_id, f]));
@@ -81,6 +83,9 @@ export default async function ScenarioPage({ params }: { params: { id: string } 
               <li key={stage.order}>
                 <strong>{stage.name}</strong>
                 <BreakAdvice stage={stage} findings={stage.finding_ids.map((id) => byId.get(id)).filter(isFinding)} controls={scenario.controls} />
+                {canVerify && stage.finding_ids.length > 0 && (
+                  <VerifyFix findingIds={stage.finding_ids} label="Verify fixes for this stage" />
+                )}
               </li>
             ))}
           </ol>

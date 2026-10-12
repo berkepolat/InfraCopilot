@@ -1,15 +1,17 @@
 import Link from "next/link";
 import { FactorChips } from "@/components/FactorChips";
+import { VerifyFix } from "@/components/VerifyFix";
 import { gatewayFetch, type Rating, type RiskSummary, type TopAsset, type TopFinding } from "@/lib/gateway";
 import { exposureSummary, factorChips } from "@/lib/risk";
-import { EmptyRow, NoAccess, PageHeader, Section, optional } from "@/lib/ui";
+import { EmptyRow, NoAccess, PageHeader, Section, getMe, optional } from "@/lib/ui";
 
 export const dynamic = "force-dynamic";
 
 const RATINGS: Rating[] = ["Critical", "High", "Medium", "Low"];
 
 export default async function RiskPage() {
-  const [risk, topFindings, topAssets] = await Promise.all([
+  const [me, risk, topFindings, topAssets] = await Promise.all([
+    getMe(),
     optional(() => gatewayFetch<RiskSummary>("/api/v1/risk/summary")),
     optional(() => gatewayFetch<{ items: TopFinding[] }>("/api/v1/risk/top-findings?limit=100")),
     optional(() => gatewayFetch<{ items: TopAsset[] }>("/api/v1/risk/top-assets?limit=25")),
@@ -19,6 +21,7 @@ export default async function RiskPage() {
   const byRating = risk.open_by_rating.finding;
   const exposure = risk.exposure_score;
   const assets = topAssets?.items.filter((a) => a.score > 0) ?? [];
+  const canVerify = me.permissions.includes("assessments:run");
 
   return (
     <>
@@ -105,7 +108,10 @@ export default async function RiskPage() {
                   <td className="muted small wrap">{f.subject_key || "—"}</td>
                   <td><FactorChips chips={factorChips(f.factors, f.known_exploited)} /></td>
                   <td>{f.severity}<div className="muted small">{f.status}</div></td>
-                  <td className="muted">{f.lifecycle_state.replace("_", " ")}</td>
+                  <td className="muted">
+                    {f.lifecycle_state.replace("_", " ")}
+                    {canVerify && <div><VerifyFix findingIds={[f.finding_id]} label="Verify" /></div>}
+                  </td>
                 </tr>
               ))}
             </tbody>

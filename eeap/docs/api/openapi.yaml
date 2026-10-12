@@ -526,6 +526,52 @@ paths:
                       ips: {type: array, items: {type: string}}
         '409': {description: Another run is still queued or running}
         '422': {description: Invalid targets, missing SCAN_ALLOWED_CIDRS, control not enabled, or WinRM / Linux controls requested without WINRM_USERNAME / LINUX_SSH_USERNAME}
+  /assessments/verifications:
+    get:
+      tags: [Assessments]
+      x-permission: assessments:read
+      summary: Fix verification history
+      parameters:
+        - {name: finding_id, in: query, schema: {type: string, format: uuid}}
+        - {name: run_id, in: query, schema: {type: string, format: uuid}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 50}}
+      responses:
+        '200':
+          description: Verifications, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/FixVerification'}}
+    post:
+      tags: [Assessments]
+      x-permission: assessments:run
+      summary: Verify that findings were fixed with a targeted reassessment
+      description: |
+        Queues a run (`trigger: verification`) limited to the selected findings' controls and, for
+        NET findings, their hosts (plus any non-default port taken from `tcp:<port>` / `web:<port>`
+        subjects). The same scope rules as `POST /assessments/runs` apply. When the run finishes, each
+        verification becomes `verified` (observed PASS, finding resolved), `still_failing`,
+        `inconclusive` (host or control not assessed) or `failed` (run failed). Only open,
+        acknowledged or in-remediation findings from server-side assessments can be verified; AD and
+        NET findings must be verified separately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [finding_ids]
+              properties:
+                finding_ids: {type: array, minItems: 1, maxItems: 50, items: {type: string, format: uuid}}
+                note: {type: string, maxLength: 2000}
+      responses:
+        '202': {description: Verification run queued; returns the run and the pending verifications}
+        '404': {description: A finding does not exist}
+        '409': {description: Another run is active or a selected finding already has a pending verification}
+        '422': {description: Finding not verifiable (wrong source, not open, no IP, mixed AD and NET, or out of scope)}
   /assessments/runs/{run_id}:
     get:
       tags: [Assessments]
@@ -1441,6 +1487,23 @@ components:
         created_at: {type: string, format: date-time}
         started_at: {type: [string, 'null'], format: date-time}
         completed_at: {type: [string, 'null'], format: date-time}
+    FixVerification:
+      type: object
+      properties:
+        verification_id: {type: string, format: uuid}
+        finding_id: {type: string, format: uuid}
+        run_id: {type: string, format: uuid, nullable: true}
+        status: {type: string, enum: [pending, verified, still_failing, inconclusive, failed]}
+        requested_by: {type: string}
+        note: {type: string, nullable: true}
+        requested_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time, nullable: true}
+        observed_status: {type: string, nullable: true}
+        summary: {type: string, nullable: true}
+        control_id: {type: string}
+        asset_id: {type: string}
+        subject_key: {type: string}
+        lifecycle_state: {type: string}
     RunPage:
       type: object
       properties:

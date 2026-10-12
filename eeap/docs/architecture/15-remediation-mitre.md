@@ -51,6 +51,17 @@ controls) and per tactic. Techniques without open findings are omitted.
 `GET /risk/remediation?status=proposed&status=accepted` (default), `PATCH /risk/remediation/{id}`,
 `GET /risk/mitre`. The dashboard shows the roadmap and the ATT&CK exposure table.
 
+## Fix verification
+
+After applying a fix, a user with `assessments:run` can confirm it from the remediation page (per
+roadmap item), the risk page (per finding) or an attack scenario (per chain stage).
+`POST /assessments/verifications` queues a reassessment limited to the selected findings' controls
+and hosts ([ADR-0022](../adr/0022-fix-verification-by-targeted-reassessment.md)). Each finding gets
+an outcome: `verified` (observed PASS and resolved), `still_failing`, `inconclusive` (not observed,
+for example an unreachable host) or `failed` (run failed). Outcomes appear in the finding detail
+(`verifications`), the finding history and `GET /assessments/verifications`; the remediation page
+lists recent ones. Only an observed PASS resolves a finding.
+
 ## Next steps
 
 - Executive and technical reports with the roadmap and ATT&CK view: see [doc 16](16-reporting.md).

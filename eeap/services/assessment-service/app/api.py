@@ -90,66 +90,144 @@ class RunRequest(BaseModel):
     ports: list[str] | None = Field(default=None, max_length=64)
 
 
-@router.post("/assessments/runs", status_code=202)
-async def start_run(payload: RunRequest, principal: Principal = Depends(require_permission("assessments:run")),
-                    engine: AsyncEngine = Depends(get_engine)):
+def _authorize_scope(targets: list[str] | None, ports: list[str] | None) -> tuple[str, list[str], list[int]]:
     from .collectors.port_scan import MAX_CONNECTIONS_PER_RUN, PortSpecError, parse_ports, scan_ports
     from .targets import TargetError, authorize_targets, parse_targets
 
-    module = "NET" if payload.targets else "AD"
-    if payload.ports and module != "NET":
+    module = "NET" if targets else "AD"
+    if ports and module != "NET":
         raise HTTPException(422, detail="ports require targets (network assessment)")
     try:
-        ips = authorize_targets(parse_targets(payload.targets), settings.scan_allowed_cidrs) if module == "NET" else []
-        extra_ports = parse_ports(payload.ports)
+        ips = authorize_targets(parse_targets(targets), settings.scan_allowed_cidrs) if module == "NET" else []
+        extra_ports = parse_ports(ports)
     except (TargetError, PortSpecError) as exc:
         raise HTTPException(422, detail=str(exc)) from exc
     if len(ips) * len(scan_ports(extra_ports)) > MAX_CONNECTIONS_PER_RUN:
         raise HTTPException(422, detail=f"targets x ports exceeds {MAX_CONNECTIONS_PER_RUN} connections per run")
+    return module, ips, extra_ports
 
+
+async def _create_run(conn, *, module: str, ips: list[str], extra_ports: list[int], control_ids: list[str] | None,
+                      principal: Principal, trigger: str) -> dict:
+    """Validates the controls, checks no other run is in progress, and queues the run."""
+    # Network runs also evaluate the server-executed WIN and LINUX host controls.
+    modules = ["NET", "WIN", "LINUX"] if module == "NET" else [module]
+    enabled = set((await conn.execute(text(
+        "SELECT control_id FROM assessment.controls WHERE enabled AND execution_site = 'server' "
+        "AND module = ANY(:modules)"), {"modules": modules})).scalars())
+    unconfigured: dict[str, str] = {}
+    if module == "NET" and not settings.winrm_configured():
+        unconfigured |= dict.fromkeys(WINRM_CONTROLS, "WinRM credentials (WINRM_USERNAME)")
+    if module == "NET" and not settings.linux_configured():
+        unconfigured |= dict.fromkeys(LINUX_CONTROLS, "an SSH scanner account (LINUX_SSH_USERNAME)")
+    requested = control_ids or sorted(enabled - set(unconfigured))
+    if blocked := sorted(set(requested) & set(unconfigured)):
+        needs = sorted({unconfigured[c] for c in blocked})
+        raise HTTPException(422, detail=f"{', '.join(blocked)} need {' and '.join(needs)}, "
+                                        "which is not configured")
+    # Only controls of this run's modules are enabled here, so this also rejects mixing AD and NET.
+    unknown = sorted(set(requested) - enabled)
+    if unknown:
+        raise HTTPException(422, detail=f"not an enabled {module} control: {', '.join(unknown)}")
+    if not requested:
+        raise HTTPException(422, detail=f"no {module} controls are enabled")
+    busy = (await conn.execute(text(
+        "SELECT run_id::text FROM assessment.assessment_runs "
+        "WHERE trigger IN ('manual', 'api', 'schedule', 'verification') "
+        "AND status IN ('queued', 'running') AND created_at > now() - interval '1 hour' LIMIT 1"))).scalar()
+    if busy:
+        raise HTTPException(409, detail=f"assessment run {busy} is still in progress")
+    scope: dict = {"ips": ips} if ips else {}
+    if extra_ports:
+        scope["ports"] = extra_ports
+    full_scope = module == "AD"
+    run_id = (await conn.execute(
+        text("INSERT INTO assessment.assessment_runs "
+             "(trigger, control_ids, scope, full_scope, requested_by) "
+             "VALUES (:trigger, :controls, CAST(:scope AS jsonb), :full, :by) RETURNING run_id::text"),
+        {"trigger": trigger, "controls": requested, "scope": json.dumps(scope), "full": full_scope,
+         "by": principal.subject})).scalar_one()
+    await enqueue_event(conn, SCHEMA, "eeap.assessment", new_envelope(
+        event_type="assessment.run_requested", source=settings.service_name, subject=run_id,
+        actor={"type": "user", "id": principal.subject},
+        data={"run_id": run_id, "trigger": trigger, "control_ids": requested, "scope": scope}))
+    return {"run_id": run_id, "status": "queued", "control_ids": requested, "scope": scope, "module": module}
+
+
+@router.post("/assessments/runs", status_code=202)
+async def start_run(payload: RunRequest, principal: Principal = Depends(require_permission("assessments:run")),
+                    engine: AsyncEngine = Depends(get_engine)):
+    module, ips, extra_ports = _authorize_scope(payload.targets, payload.ports)
     async with engine.begin() as conn:
-        # Network runs also evaluate the server-executed WIN and LINUX host controls.
-        modules = ["NET", "WIN", "LINUX"] if module == "NET" else [module]
-        enabled = set((await conn.execute(text(
-            "SELECT control_id FROM assessment.controls WHERE enabled AND execution_site = 'server' "
-            "AND module = ANY(:modules)"), {"modules": modules})).scalars())
-        unconfigured: dict[str, str] = {}
-        if module == "NET" and not settings.winrm_configured():
-            unconfigured |= dict.fromkeys(WINRM_CONTROLS, "WinRM credentials (WINRM_USERNAME)")
-        if module == "NET" and not settings.linux_configured():
-            unconfigured |= dict.fromkeys(LINUX_CONTROLS, "an SSH scanner account (LINUX_SSH_USERNAME)")
-        requested = payload.control_ids or sorted(enabled - set(unconfigured))
-        if blocked := sorted(set(requested) & set(unconfigured)):
-            needs = sorted({unconfigured[c] for c in blocked})
-            raise HTTPException(422, detail=f"{', '.join(blocked)} need {' and '.join(needs)}, "
-                                            "which is not configured")
-        # Only controls of this run's modules are enabled here, so this also rejects mixing AD and NET.
-        unknown = sorted(set(requested) - enabled)
-        if unknown:
-            raise HTTPException(422, detail=f"not an enabled {module} control: {', '.join(unknown)}")
-        if not requested:
-            raise HTTPException(422, detail=f"no {module} controls are enabled")
-        busy = (await conn.execute(text(
-            "SELECT run_id::text FROM assessment.assessment_runs WHERE trigger IN ('manual', 'api', 'schedule') "
-            "AND status IN ('queued', 'running') AND created_at > now() - interval '1 hour' LIMIT 1"))).scalar()
-        if busy:
-            raise HTTPException(409, detail=f"assessment run {busy} is still in progress")
-        scope = {"ips": ips} if ips else {}
-        if extra_ports:
-            scope["ports"] = extra_ports
-        full_scope = module == "AD"
-        run_id = (await conn.execute(
-            text("INSERT INTO assessment.assessment_runs "
-                 "(trigger, control_ids, scope, full_scope, requested_by) "
-                 "VALUES ('manual', :controls, CAST(:scope AS jsonb), :full, :by) RETURNING run_id::text"),
-            {"controls": requested, "scope": json.dumps(scope), "full": full_scope,
-             "by": principal.subject})).scalar_one()
-        await enqueue_event(conn, SCHEMA, "eeap.assessment", new_envelope(
-            event_type="assessment.run_requested", source=settings.service_name, subject=run_id,
-            actor={"type": "user", "id": principal.subject},
-            data={"run_id": run_id, "trigger": "manual", "control_ids": requested, "scope": scope}))
-    return {"run_id": run_id, "status": "queued", "control_ids": requested, "scope": scope,
-            "module": module}
+        return await _create_run(conn, module=module, ips=ips, extra_ports=extra_ports,
+                                 control_ids=payload.control_ids, principal=principal, trigger="manual")
+
+
+class VerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    finding_ids: list[uuid.UUID] = Field(min_length=1, max_length=50)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+@router.post("/assessments/verifications", status_code=202)
+async def verify_fixes(payload: VerificationRequest,
+                       principal: Principal = Depends(require_permission("assessments:run")),
+                       engine: AsyncEngine = Depends(get_engine)):
+    """Reassesses only the selected findings' controls (and hosts) to confirm that a fix worked."""
+    from .collectors.port_scan import COMMON_PORTS
+    from .verification import VerificationError, plan
+
+    ids = sorted({str(i) for i in payload.finding_ids})
+    async with engine.begin() as conn:
+        findings = [dict(r) for r in (await conn.execute(text(
+            "SELECT finding_id::text AS finding_id, asset_id, control_id, subject_key, status, lifecycle_state, "
+            "source, raw_data->>'ip' AS ip FROM assessment.findings WHERE finding_id = ANY(CAST(:ids AS uuid[])) "
+            "FOR UPDATE"),
+            {"ids": ids})).mappings()]
+        if len(findings) != len(ids):
+            raise HTTPException(404, detail="finding not found")
+        pending = (await conn.execute(text(
+            "SELECT count(*) FROM assessment.finding_verifications WHERE status = 'pending' "
+            "AND finding_id = ANY(CAST(:ids AS uuid[]))"), {"ids": ids})).scalar()
+        if pending:
+            raise HTTPException(409, detail="a verification of these findings is already pending")
+        try:
+            verification = plan(findings, COMMON_PORTS)
+        except VerificationError as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        module, ips, extra_ports = _authorize_scope(
+            verification.ips or None, [str(p) for p in verification.ports] or None)
+        run = await _create_run(conn, module=module, ips=ips, extra_ports=extra_ports,
+                                control_ids=verification.control_ids, principal=principal, trigger="verification")
+        rows = (await conn.execute(text(
+            "INSERT INTO assessment.finding_verifications (finding_id, run_id, requested_by, note) "
+            "SELECT f, CAST(:run AS uuid), :by, :note FROM unnest(CAST(:ids AS uuid[])) AS f "
+            "RETURNING verification_id::text, finding_id::text"),
+            {"run": run["run_id"], "by": principal.subject, "note": payload.note, "ids": ids})).mappings()
+        return {**run, "verifications": [dict(r) for r in rows]}
+
+
+@router.get("/assessments/verifications")
+async def list_verifications(finding_id: uuid.UUID | None = None, run_id: uuid.UUID | None = None,
+                             limit: int = Query(50, ge=1, le=500),
+                             _: Principal = Depends(require_permission("assessments:read")),
+                             engine: AsyncEngine = Depends(get_engine)):
+    clauses, params = ["TRUE"], {"limit": limit}
+    if finding_id:
+        clauses.append("v.finding_id = :finding")
+        params["finding"] = finding_id
+    if run_id:
+        clauses.append("v.run_id = :run")
+        params["run"] = run_id
+    async with engine.connect() as conn:
+        rows = await conn.execute(text(
+            "SELECT v.verification_id, v.finding_id, v.run_id, v.status, v.requested_by, v.note, v.requested_at, "
+            "v.completed_at, v.observed_status, v.summary, f.control_id, f.asset_id, f.subject_key, "
+            "f.lifecycle_state FROM assessment.finding_verifications v "
+            "JOIN assessment.findings f USING (finding_id) "
+            f"WHERE {' AND '.join(clauses)} ORDER BY v.requested_at DESC, v.verification_id LIMIT :limit"), params)
+        return {"items": [dict(r) for r in rows.mappings()]}
 
 
 @router.get("/assessments/runs/{run_id}")
@@ -439,8 +517,13 @@ async def finding_detail(finding_id: uuid.UUID, _: Principal = Depends(require_p
             text("SELECT acceptance_id, justification, approved_by, expires_at, revoked_at, created_at "
                  "FROM assessment.risk_acceptances WHERE finding_id = :id ORDER BY created_at DESC"),
             {"id": finding_id})
+        verifications = await conn.execute(
+            text("SELECT verification_id, run_id, status, requested_by, note, requested_at, completed_at, "
+                 "observed_status, summary FROM assessment.finding_verifications WHERE finding_id = :id "
+                 "ORDER BY requested_at DESC LIMIT 20"), {"id": finding_id})
         return {**finding, "history": [dict(r) for r in history.mappings()],
-                "risk_acceptances": [dict(r) for r in acceptances.mappings()]}
+                "risk_acceptances": [dict(r) for r in acceptances.mappings()],
+                "verifications": [dict(r) for r in verifications.mappings()]}
 
 
 class TriageRequest(BaseModel):
