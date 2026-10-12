@@ -9,6 +9,21 @@ export const EXPOSURE_CLASS_LABELS: Record<string, string> = {
   cleartext_login: "cleartext login",
 };
 
+/** ATT&CK enterprise tactics in kill-chain order. */
+export const TACTIC_LABELS: Record<string, string> = {
+  "initial-access": "Initial Access",
+  execution: "Execution",
+  persistence: "Persistence",
+  "privilege-escalation": "Privilege Escalation",
+  "defense-evasion": "Defense Evasion",
+  "credential-access": "Credential Access",
+  discovery: "Discovery",
+  "lateral-movement": "Lateral Movement",
+  collection: "Collection",
+  exfiltration: "Exfiltration",
+  impact: "Impact",
+};
+
 export type FactorChip = { label: string; hot: boolean; title: string };
 
 /** Why a finding ranks where it does, from the stored factor breakdown (docs/architecture/08). */

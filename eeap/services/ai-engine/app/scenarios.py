@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from .correlation import FindingFact, GraphFact, Scenario, evaluate
+from .correlation import AssetContext, ExposureFact, FindingFact, GraphFact, Scenario, evaluate
 from .remediation import ActiveScenario, OpenFinding, Template, build_roadmap
-from .scoring import ScoreResult, ScoringModel
+from .scoring import ScoreResult, ScoringModel, network_exposure
 
 
 @dataclass(frozen=True)
@@ -29,10 +29,11 @@ def _is_dn(subject_key: str) -> bool:
 
 
 async def _load(conn: AsyncConnection, controls: list[str], gating_status, gating_lifecycle):
-    findings = [FindingFact(r.finding_id, r.control_id, r.asset_id, r.subject_key, int(r.score))
+    findings = [FindingFact(r.finding_id, r.control_id, r.asset_id, r.subject_key, int(r.score),
+                            float(r.exploitability), bool(r.known_exploited))
                 for r in await conn.execute(text("""
         SELECT f.finding_id::text AS finding_id, f.control_id, f.asset_id, f.subject_key,
-               coalesce(s.score, 0) AS score
+               coalesce(s.score, 0) AS score, f.exploitability, f.known_exploited
         FROM ai.finding_facts f
         LEFT JOIN ai.risk_scores s ON s.subject_type = 'finding' AND s.subject_id = f.finding_id::text AND s.is_current
         WHERE f.status = ANY(:gs) AND f.lifecycle_state = ANY(:gl) AND f.control_id = ANY(:controls)"""),
@@ -44,6 +45,28 @@ async def _load(conn: AsyncConnection, controls: list[str], gating_status, gatin
         facts[(r.subject_kind, r.subject_key)] = GraphFact(r.p, r.tier0_reachable, r.min_hops, r.is_tier0,
                                                            r.is_privileged)
     return findings, facts
+
+
+def _exposure_fact(services: list[dict]) -> ExposureFact:
+    score, classes = network_exposure(services)
+    ordered = sorted(services, key=lambda s: s.get("port") or 0)
+    labels = tuple(f"{s.get('port')}/{s.get('service') or '?'}" for s in ordered)
+    return ExposureFact(score, tuple(classes), labels)
+
+
+async def _asset_contexts(conn: AsyncConnection, asset_ids: list[str],
+                          facts: dict[tuple[str, str], GraphFact]) -> dict[str, AssetContext]:
+    rows = await conn.execute(text("""
+        SELECT a.asset_id, coalesce(af.hostname, host(x.ip), a.asset_id) AS label, x.services
+        FROM unnest(CAST(:ids AS text[])) AS a(asset_id)
+        LEFT JOIN ai.asset_facts af ON af.asset_id = a.asset_id
+        LEFT JOIN ai.exposure_facts x ON x.asset_id = a.asset_id"""), {"ids": asset_ids})
+    contexts = {}
+    for r in rows:
+        services = json.loads(r.services) if isinstance(r.services, str) else r.services
+        contexts[r.asset_id] = AssetContext(r.label, facts.get(("asset", r.asset_id)),
+                                            _exposure_fact(services) if services is not None else None)
+    return contexts
 
 
 async def correlate(conn: AsyncConnection, model: ScoringModel, gating_status, gating_lifecycle) -> CorrelationStats:
@@ -63,7 +86,14 @@ async def correlate(conn: AsyncConnection, model: ScoringModel, gating_status, g
     def subject_graph(subject_key: str) -> GraphFact | None:
         return facts.get(("dn", subject_key.lower())) if _is_dn(subject_key) else None
 
-    scenarios = evaluate(rules, findings, graph_of, subject_graph)
+    contexts: dict[str, AssetContext] = {}
+    if any(d.get("scope") == "asset" for d in rules.values()):
+        contexts = await _asset_contexts(conn, sorted({f.asset_id for f in findings}), facts)
+
+    def asset_context(asset_id: str) -> AssetContext | None:
+        return contexts.get(asset_id)
+
+    scenarios = evaluate(rules, findings, graph_of, subject_graph, asset_context)
     scores: dict[str, ScoreResult] = {}
     detected: list[str] = []
     active: list[ActiveScenario] = []
@@ -85,7 +115,7 @@ async def correlate(conn: AsyncConnection, model: ScoringModel, gating_status, g
         if control_id not in rule_controls:
             return current_keys
         remaining = [f for f in findings if f.control_id != control_id]
-        return {(s.rule_id, s.scope_key) for s in evaluate(rules, remaining, graph_of, subject_graph)}
+        return {(s.rule_id, s.scope_key) for s in evaluate(rules, remaining, graph_of, subject_graph, asset_context)}
 
     await _store_roadmap(conn, gating_status, gating_lifecycle, active, still_matching)
 

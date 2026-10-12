@@ -76,7 +76,7 @@ export default async function Overview() {
                 {scenarios.map((s) => (
                   <tr key={s.scenario_id}>
                     <td><span className={`badge ${s.rating}`}>{s.score}</span></td>
-                    <td>{s.title}<div className="muted small">{s.affected_asset_ids.join(", ") || "—"}</div></td>
+                    <td><Link href={`/risk/scenarios/${s.scenario_id}`}>{s.title}</Link><div className="muted small">{s.affected_asset_ids.join(", ") || "—"}</div></td>
                   </tr>
                 ))}
               </tbody>

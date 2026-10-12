@@ -113,8 +113,47 @@ export type RiskScenario = {
   rating: Rating;
   status: string;
   affected_asset_ids: string[];
-  stages: { order: number; name: string; matched: boolean; finding_ids: string[]; derived?: boolean }[];
+  stages: ScenarioStage[];
   first_detected_at: string;
+};
+
+export type ScenarioStage = {
+  order: number;
+  name: string;
+  matched: boolean;
+  finding_ids: string[];
+  derived?: boolean;
+  tactic?: string;
+  breaks_chain?: boolean;
+  graph?: { tier0_reachable: boolean; min_hops: number | null; propagation_score: number; is_tier0: boolean; is_privileged: boolean };
+  exposure?: { score: number; classes: string[]; services: string[] };
+};
+
+export type ScenarioFinding = {
+  finding_id: string;
+  stage_order: number;
+  control_id: string | null;
+  asset_id: string | null;
+  subject_key: string | null;
+  severity: string | null;
+  status: string | null;
+  lifecycle_state: string | null;
+  score: number;
+  rating: Rating;
+  exploitability: number | null;
+  known_exploited: boolean | null;
+};
+
+export type ScenarioDetail = RiskScenario & {
+  scope_key: string;
+  last_evaluated_at: string;
+  factors: { stages_matched?: number; evidence_stages?: number; max_stage_finding_score?: number; stage_bonus?: number } | null;
+  findings: ScenarioFinding[];
+  controls: Record<string, {
+    remediation: { title: string; guidance: string; effort: string } | null;
+    techniques: { technique_id: string; name: string; tactics: string[] }[];
+  }>;
+  asset_names: Record<string, string>;
 };
 
 export type RemediationItem = {

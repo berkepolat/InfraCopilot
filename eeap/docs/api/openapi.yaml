@@ -1018,6 +1018,27 @@ paths:
                             status: {type: string}
                             lifecycle_state: {type: string}
                             score: {type: integer}
+                            rating: {type: string}
+                            exploitability: {type: number}
+                            known_exploited: {type: boolean}
+                      controls:
+                        type: object
+                        description: Per control of the supporting findings
+                        additionalProperties:
+                          type: object
+                          properties:
+                            remediation:
+                              type: [object, 'null']
+                              properties: {title: {type: string}, guidance: {type: string}, effort: {type: string}}
+                            techniques:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  technique_id: {type: string}
+                                  name: {type: string}
+                                  tactics: {type: array, items: {type: string}}
+                      asset_names: {type: object, additionalProperties: {type: string}}
         '404': {description: Unknown scenario}
     patch:
       tags: [Risk]
@@ -1485,7 +1506,7 @@ components:
       properties:
         scenario_id: {type: string, format: uuid}
         rule_id: {type: string}
-        scope_key: {type: string, description: '"organization" or "subject:<lower-cased subject key>"'}
+        scope_key: {type: string, description: '"organization", "subject:<lower-cased subject key>" or "asset:<lower-cased asset id>"'}
         title: {type: string}
         summary: {type: string}
         score: {type: integer}
@@ -1502,6 +1523,15 @@ components:
               derived: {type: boolean}
               finding_ids: {type: array, items: {type: string, format: uuid}}
               graph: {type: object, description: Graph fact that satisfied a graph-only stage}
+              exposure:
+                type: object
+                description: Open services that satisfied an exposure stage (asset scope)
+                properties:
+                  score: {type: number}
+                  classes: {type: array, items: {type: string}}
+                  services: {type: array, items: {type: string, example: 22/ssh}}
+              tactic: {type: string, description: ATT&CK tactic shortname (presentation only)}
+              breaks_chain: {type: boolean, description: The scenario no longer matches without this stage}
         affected_asset_ids: {type: array, items: {type: string}}
         status: {type: string, enum: [active, mitigated, dismissed]}
         first_detected_at: {type: string, format: date-time}

@@ -140,6 +140,27 @@ td button { margin-top: 0; padding: 4px 10px; font-size: 12px; }
 .status.partially_completed::before { color: var(--medium); }
 .status.failed::before, .status.rejected::before, .status.expired::before { color: var(--critical); }
 
+.status.active::before { color: var(--critical); }
+.status.mitigated::before { color: var(--low); }
+.card .small-value { font-size: 15px; }
+
+.chain { display: flex; align-items: stretch; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
+.chain-arrow { align-self: center; color: var(--muted); font-size: 22px; }
+.chain-stage { flex: 1 1 0; min-width: 190px; max-width: 300px; background: var(--panel); border: 1px solid var(--border);
+  border-top: 3px solid var(--high); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+.chain-stage.breaker { border-color: var(--accent); border-top-color: var(--accent); }
+.chain-stage.derived { border-style: dashed; border-top: 3px solid var(--critical); }
+.chain-stage.absent { opacity: 0.45; border-top-color: var(--border); }
+.chain-stage .tactic { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.chain-stage .stage-name { font-weight: 600; }
+.chain-stage .breaks { margin-top: auto; font-size: 11px; color: var(--accent); }
+.stage-findings { list-style: none; margin: 0; padding: 0; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+.stage-findings .wrap { overflow-wrap: anywhere; }
+.break-list { padding-left: 20px; }
+.break-list > li { margin-bottom: 12px; }
+.break-list p { margin: 4px 0 0; }
+.advice { margin: 4px 0 0; padding-left: 18px; }
+
 .bar { width: 80px; height: 6px; border-radius: 3px; background: var(--border); margin-bottom: 4px; overflow: hidden; }
 .bar span { display: block; height: 100%; background: var(--accent); }
 .download { margin-right: 10px; font-size: 12px; font-weight: 600; }

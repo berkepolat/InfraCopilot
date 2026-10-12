@@ -37,8 +37,10 @@ risk concentration areas, which drive the propagation factor R of the risk score
 ([doc 13](docs/architecture/13-graph-analytics.md)). Scoring model v2 also weighs uploaded exploitation
 evidence (CISA KEV, EPSS) for vulnerable packages, each host's network exposure from the port scan and the
 asset criticality set on the Assets page; the Risks page shows why each finding ranks where it does
-([ADR-0020](docs/adr/0020-exploitation-and-exposure-in-risk-scoring.md)). Correlation rules combine open findings and
-graph facts into risk scenarios ([doc 14](docs/architecture/14-correlation.md)), which feed a
+([ADR-0020](docs/adr/0020-exploitation-and-exposure-in-risk-scoring.md)). Correlation rules combine open findings,
+graph facts and network exposure into risk scenarios — including host-level chains such as an exposed host with
+a KEV-listed vulnerability — shown stage by stage with ATT&CK tactics and the fixes that break each chain
+([doc 14](docs/architecture/14-correlation.md)), which feed a
 prioritized remediation roadmap and an ATT&CK exposure view ([doc 15](docs/architecture/15-remediation-mitre.md)).
 Executive, technical, roadmap and ATT&CK reports are rendered as PDF, HTML and JSON with the
 requester's permissions ([doc 16](docs/architecture/16-reporting.md)).

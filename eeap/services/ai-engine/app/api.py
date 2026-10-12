@@ -173,14 +173,31 @@ async def _scenario(conn, scenario_id: uuid.UUID) -> dict:
                               {"id": scenario_id})).mappings().first()
     if row is None:
         raise HTTPException(404, detail="scenario not found")
-    findings = await conn.execute(text("""
+    findings = [dict(f) for f in (await conn.execute(text("""
         SELECT sf.finding_id::text AS finding_id, sf.stage_order, f.control_id, f.asset_id, f.subject_key,
-               f.severity, f.status, f.lifecycle_state, coalesce(s.score, 0) AS score
+               f.severity, f.status, f.lifecycle_state, coalesce(s.score, 0) AS score,
+               coalesce(s.rating, 'Low') AS rating, f.exploitability::float AS exploitability, f.known_exploited
         FROM ai.scenario_findings sf
         LEFT JOIN ai.finding_facts f ON f.finding_id = sf.finding_id
         LEFT JOIN ai.risk_scores s ON s.subject_type = 'finding' AND s.subject_id = sf.finding_id::text AND s.is_current
-        WHERE sf.scenario_id = :id ORDER BY sf.stage_order, score DESC"""), {"id": scenario_id})
-    return {**row, "findings": [dict(f) for f in findings.mappings()]}
+        WHERE sf.scenario_id = :id ORDER BY sf.stage_order, score DESC"""), {"id": scenario_id})).mappings()]
+    control_ids = sorted({f["control_id"] for f in findings if f["control_id"]})
+    controls: dict[str, dict] = {c: {"remediation": None, "techniques": []} for c in control_ids}
+    for r in (await conn.execute(text(
+            "SELECT control_id, title, guidance, effort FROM ai.remediation_templates WHERE control_id = ANY(:c)"),
+            {"c": control_ids})).mappings():
+        controls[r["control_id"]]["remediation"] = {"title": r["title"], "guidance": r["guidance"],
+                                                    "effort": r["effort"]}
+    for r in (await conn.execute(text(
+            "SELECT m.control_id, t.technique_id, t.name, t.tactics FROM ai.control_technique_map m "
+            "JOIN ai.mitre_techniques t USING (technique_id) WHERE m.control_id = ANY(:c) "
+            "ORDER BY m.control_id, t.technique_id"), {"c": control_ids})).mappings():
+        controls[r["control_id"]]["techniques"].append(
+            {"technique_id": r["technique_id"], "name": r["name"], "tactics": r["tactics"]})
+    assets = {r.asset_id: r.hostname for r in await conn.execute(text(
+        "SELECT asset_id, hostname FROM ai.asset_facts WHERE asset_id = ANY(:a) AND hostname IS NOT NULL"),
+        {"a": list(row["affected_asset_ids"] or [])})}
+    return {**row, "findings": findings, "controls": controls, "asset_names": assets}
 
 
 @router.get("/risk/scenarios/{scenario_id}")

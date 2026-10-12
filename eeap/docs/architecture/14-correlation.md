@@ -37,12 +37,19 @@ The organization exposure score uses the highest **active** scenario score (doc 
 
 | Key | Meaning |
 |-----|---------|
-| `scope` | `subject`: one scenario per finding subject (account, computer, …); `organization`: one scenario for all findings |
+| `scope` | `subject`: one scenario per finding subject (account, computer, …); `asset`: one scenario per asset (host-level chains); `organization`: one scenario for all findings |
 | `match` | `all_stages`, or `{"min_stages": n}` evidence stages; stages with `"required": true` must always match |
 | `any_failed_controls` | the stage matches open findings of these controls |
-| `graph` | condition on the graph fact of each matching finding, or — for a stage without controls in subject scope — of the scenario subject: `tier0_reachable` (+ `max_hops`), `privileged`; Tier-0 objects themselves only satisfy `tier0_reachable` with `include_tier0` |
+| `finding` | condition on each matching finding: `min_exploitability` (finding-level, from KEV/EPSS where available), `known_exploited` |
+| `graph` | condition on the graph fact of each matching finding, or — for a stage without controls in subject/asset scope — of the scenario subject or asset: `tier0_reachable` (+ `max_hops`), `privileged`; Tier-0 objects themselves only satisfy `tier0_reachable` with `include_tier0` |
+| `exposure` | asset scope, stage without controls: the asset's open services from the latest port scan (`ai.exposure_facts`) satisfy `classes` (any of the exposure classes, doc 08) and `min_score`; `{}` = any open service. A scanned host without open services or an unscanned host never matches |
 | `derived` | consequence stage without evidence; holds when the scenario matches |
-| templates | `{subject}` (CN of a DN, else the subject key), `{stages}`, `{findings}` |
+| `tactic` | ATT&CK tactic shortname of the stage, for presentation only |
+| templates | `{subject}` (CN of a DN, the asset host name in asset scope, else the subject key), `{stages}`, `{findings}` |
+
+Each matched evidence stage is marked `breaks_chain` when the scenario would no longer match
+without it — fixing all of its findings (or closing the exposure, or removing the graph path)
+ends the scenario. With `min_stages` only required stages, or stages at the threshold, break it.
 
 Graph facts are looked up exactly as for scoring: a DN subject uses its directory object, any
 other finding the fact of its asset (doc 13).
@@ -57,6 +64,12 @@ Scenario score: `max(stage finding scores) + 5 × (evidence stages matched − 1
 | `CORR-AD-002` | subject | AD-004/005/006 delegation → Tier 0 within 2 hops → privilege escalation exposure |
 | `CORR-AD-003` | organization | ≥ 3 of: AD-001 password policy, AD-002/003 credentials, **AD-007 privileged sprawl (required)**, AD-008 LAPS → increased organizational risk |
 | `CORR-AUTH-001` | organization | WIN-001/003/004/005 → AD-002/003 → AD-007 on privileged objects (needs Windows evidence) |
+| `CORR-HOST-001` | asset | open network services → LIN-009/WIN-010 finding with exploitability ≥ 0.9 (KEV or top EPSS) → host compromise exposure |
+| `CORR-HOST-002` | asset | WIN-010/011/012, LIN-002/008/009 patch gaps → Tier-0 asset or ≤ 2 hops to Tier 0 → Tier-0 compromise exposure |
+| `CORR-HOST-003` | asset | **remote admin / file sharing / cleartext login exposed (required)** + ≥ 1 of: weak protocol or authentication settings (WIN-001/002/003/006/008, LIN-001/005, NET-003/004/007), missing host defenses (WIN-009, LIN-004) → remote foothold exposure |
+
+All stages carry ATT&CK tactics (initial access, execution, credential access, privilege
+escalation, defense evasion, lateral movement, impact) since `ai_0012`.
 
 ## Lifecycle
 
@@ -70,9 +83,14 @@ A mitigated scenario that matches again becomes active with a new `first_detecte
 
 ## API (`risk:read`)
 
-`GET /risk/scenarios?status=active`, `GET /risk/scenarios/{id}` (stages + supporting findings),
-`PATCH /risk/scenarios/{id}` (`risk:manage`), and `top_scenarios` in `GET /risk/summary`.
-The dashboard lists the top active scenarios with their matched chain.
+`GET /risk/scenarios?status=active`, `GET /risk/scenarios/{id}` (stages + supporting findings
+with score, rating, exploitability and KEV flag; `controls` with remediation template and ATT&CK
+techniques per control; `asset_names`), `PATCH /risk/scenarios/{id}` (`risk:manage`), and
+`top_scenarios` in `GET /risk/summary`. The dashboard and the Risks page list the top active
+scenarios; each opens `/risk/scenarios/{id}`, which draws the chain stage by stage (tactic,
+evidence: open services, graph distance to Tier 0, findings), highlights the stages whose fix
+breaks the chain with the matching remediation, and lists the supporting findings. The chain
+describes exposure from configuration and scan evidence, not attack steps (ADR-0011).
 
 ## Next steps
 

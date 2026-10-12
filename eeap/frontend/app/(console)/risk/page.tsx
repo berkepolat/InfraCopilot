@@ -49,7 +49,7 @@ export default async function RiskPage() {
             {risk.top_scenarios?.map((s) => (
               <tr key={s.scenario_id}>
                 <td><span className={`badge ${s.rating}`}>{s.score}</span></td>
-                <td>{s.title}<div className="muted small">{s.rule_id} · {s.summary}</div></td>
+                <td><Link href={`/risk/scenarios/${s.scenario_id}`}>{s.title}</Link><div className="muted small">{s.rule_id} · {s.summary}</div></td>
                 <td className="small">{s.stages.filter((st) => st.matched).map((st) => st.name).join(" → ")}</td>
                 <td className="muted small">{s.affected_asset_ids.join(", ") || "—"}</td>
               </tr>
