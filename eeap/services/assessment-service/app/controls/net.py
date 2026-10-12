@@ -1,4 +1,7 @@
-"""NET-001..NET-009 evaluators. Pure functions over net_probes / port_scan snapshots."""
+"""Network run evaluators: NET-001..NET-009 plus the WIN controls observable without credentials.
+
+Pure functions over net_probes / smb_negotiate / port_scan snapshots.
+"""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -10,7 +13,10 @@ from ..targets import asset_id_for_ip
 
 SOURCE_TOOL = "eeap-net-probes/1.0"
 NET_CONTROL_IDS = tuple(f"NET-{n:03d}" for n in range(1, 10))
-PORT_SCAN_CONTROLS = ("NET-006", "NET-007", "NET-008", "NET-009")
+# Windows configuration visible on the wire; the remaining WIN controls need host access.
+WIN_NETWORK_CONTROLS = ("WIN-001", "WIN-002", "WIN-006", "WIN-008")
+NETWORK_RUN_CONTROLS = NET_CONTROL_IDS + WIN_NETWORK_CONTROLS
+PORT_SCAN_CONTROLS = ("NET-006", "NET-007", "NET-008", "NET-009", "WIN-006", "WIN-008")
 
 # control -> port -> (label, severity when exposed, status when exposed); all ports are in COMMON_PORTS.
 REMOTE_ADMIN = {22: "SSH", 3389: "RDP", 5985: "WinRM (HTTP)", 5986: "WinRM (HTTPS)", 5900: "VNC"}
@@ -156,14 +162,9 @@ def _net006_remote_admin(ctx: _HostContext) -> None:
     exposed = _open_services(ctx, REMOTE_ADMIN)
     for s in exposed:
         label, port = REMOTE_ADMIN[s["port"]], s["port"]
-        if port == 3389 and s.get("nla_required") is False:
-            ctx.emit("NET-006", "FAIL", subject=f"tcp:{port}", severity="High",
-                     summary=f"RDP on {ctx.ip}:{port} accepts connections without Network Level Authentication",
-                     **_service_details(s))
-        else:
-            ctx.emit("NET-006", "WARNING", subject=f"tcp:{port}", severity="Medium",
-                     summary=f"{label} remote administration is reachable on {ctx.ip}:{port}; restrict it to "
-                             "management networks", **_service_details(s))
+        ctx.emit("NET-006", "WARNING", subject=f"tcp:{port}", severity="Medium",
+                 summary=f"{label} remote administration is reachable on {ctx.ip}:{port}; restrict it to "
+                         "management networks", **_service_details(s))
     if not exposed:
         ctx.emit("NET-006", "PASS", subject="remote-admin",
                  summary=f"No remote administration service (SSH, RDP, WinRM, VNC) reachable on {ctx.ip}")
@@ -211,6 +212,62 @@ def _net009_control_planes(ctx: _HostContext) -> None:
                  summary=f"No container or orchestration control plane reachable on {ctx.ip}")
 
 
+# WIN controls only report on hosts that expose the service; no observation means "not applicable".
+
+def _win001_smb_signing(ctx: _HostContext) -> None:
+    probe = ctx.host["probes"].get("smb_negotiate") or {}
+    smb2, smb1 = probe.get("smb2") or {}, probe.get("smb1") or {}
+    if "signing_required" in smb2:
+        required, dialect = smb2["signing_required"], smb2.get("dialect")
+    elif smb1.get("accepted") and "signing_required" in smb1:
+        required, dialect = smb1["signing_required"], "NT LM 0.12"
+    else:
+        return
+    if required:
+        ctx.emit("WIN-001", "PASS", subject="smb:445",
+                 summary=f"SMB on {ctx.ip} requires message signing", dialect=dialect)
+    else:
+        ctx.emit("WIN-001", "FAIL", subject="smb:445", severity="High",
+                 summary=f"SMB on {ctx.ip} does not require message signing; relayed authentication "
+                         "would be accepted", dialect=dialect, signing_enabled=smb2.get("signing_enabled"))
+
+
+def _win002_smbv1(ctx: _HostContext) -> None:
+    probe = ctx.host["probes"].get("smb_negotiate") or {}
+    if not probe.get("open") or probe.get("smb1") is None:
+        return
+    if probe["smb1"].get("accepted"):
+        ctx.emit("WIN-002", "FAIL", subject="smb:445", severity="High",
+                 summary=f"SMB on {ctx.ip} accepts the SMBv1 dialect (NT LM 0.12)")
+    else:
+        ctx.emit("WIN-002", "PASS", subject="smb:445",
+                 summary=f"SMB on {ctx.ip} rejected an SMBv1-only negotiation",
+                 smb2_dialect=(probe.get("smb2") or {}).get("dialect"))
+
+
+def _win006_rdp_nla(ctx: _HostContext) -> None:
+    for s in _open_services(ctx, {3389}):
+        if s.get("nla_required") is True:
+            ctx.emit("WIN-006", "PASS", subject="tcp:3389",
+                     summary=f"RDP on {ctx.ip} requires Network Level Authentication")
+        elif s.get("nla_required") is False:
+            legacy = " and still offers legacy RDP security" if s.get("legacy_rdp_security") else ""
+            ctx.emit("WIN-006", "FAIL", subject="tcp:3389", severity="Medium",
+                     summary=f"RDP on {ctx.ip} accepts connections without Network Level Authentication{legacy}",
+                     **_service_details(s))
+
+
+def _win008_winrm(ctx: _HostContext) -> None:
+    listeners = {s["port"]: s for s in _open_services(ctx, {5985, 5986})}
+    if 5985 in listeners:
+        ctx.emit("WIN-008", "FAIL", subject="tcp:5985", severity="Medium",
+                 summary=f"WinRM HTTP listener (5985) is reachable on {ctx.ip}; use HTTPS listeners only",
+                 **_service_details(listeners[5985]))
+    elif 5986 in listeners:
+        ctx.emit("WIN-008", "PASS", subject="tcp:5985",
+                 summary=f"WinRM on {ctx.ip} is reachable over HTTPS (5986) only")
+
+
 EVALUATORS: dict[str, Callable[[_HostContext], None]] = {
     "NET-001": _net001_dns_axfr,
     "NET-002": _net002_tls,
@@ -221,6 +278,10 @@ EVALUATORS: dict[str, Callable[[_HostContext], None]] = {
     "NET-007": _net007_cleartext,
     "NET-008": _net008_data_stores,
     "NET-009": _net009_control_planes,
+    "WIN-001": _win001_smb_signing,
+    "WIN-002": _win002_smbv1,
+    "WIN-006": _win006_rdp_nla,
+    "WIN-008": _win008_winrm,
 }
 
 
@@ -244,7 +305,7 @@ def discovered_assets(hosts: list[dict]) -> list[dict]:
 
 
 def evaluate(snapshot: dict, control_ids: list[str] | None, now: datetime) -> Evaluation:
-    selected = [c for c in NET_CONTROL_IDS if control_ids is None or c in control_ids]
+    selected = [c for c in NETWORK_RUN_CONTROLS if control_ids is None or c in control_ids]
     observations: list[ImportRow] = []
     for host in snapshot.get("hosts") or []:
         ctx = _HostContext(host, now)

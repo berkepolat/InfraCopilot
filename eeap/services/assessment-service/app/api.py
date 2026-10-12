@@ -105,9 +105,11 @@ async def start_run(payload: RunRequest, principal: Principal = Depends(require_
         raise HTTPException(422, detail=f"targets x ports exceeds {MAX_CONNECTIONS_PER_RUN} connections per run")
 
     async with engine.begin() as conn:
+        # Network runs also evaluate the WIN controls observable on the wire (execution_site 'server').
+        modules = ["NET", "WIN"] if module == "NET" else [module]
         enabled = set((await conn.execute(text(
-            "SELECT control_id FROM assessment.controls WHERE enabled AND module = :module"),
-            {"module": module})).scalars())
+            "SELECT control_id FROM assessment.controls WHERE enabled AND execution_site = 'server' "
+            "AND module = ANY(:modules)"), {"modules": modules})).scalars())
         requested = payload.control_ids or sorted(enabled)
         unknown = sorted(set(requested) - enabled)
         if unknown:
@@ -116,7 +118,7 @@ async def start_run(payload: RunRequest, principal: Principal = Depends(require_
             raise HTTPException(422, detail=f"no {module} controls are enabled")
         # Reject mixing modules in one run.
         prefixes = {c.split("-", 1)[0] for c in requested}
-        if prefixes != {module}:
+        if not prefixes <= set(modules):
             raise HTTPException(422, detail=f"control_ids must all belong to module {module} for this request")
         busy = (await conn.execute(text(
             "SELECT run_id::text FROM assessment.assessment_runs WHERE trigger IN ('manual', 'api', 'schedule') "

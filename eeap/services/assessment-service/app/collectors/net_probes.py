@@ -1,4 +1,4 @@
-"""Read-only network configuration probes for NET-001..NET-005 (ADR-0011).
+"""Read-only network configuration probes for NET-001..NET-005, WIN-001 and WIN-002 (ADR-0011).
 
 Probes observe service exposure and protocol configuration only: TCP/TLS handshakes,
 DNS AXFR policy, SNMP community response, NTP version replies. No authentication
@@ -13,6 +13,8 @@ import ssl
 import time
 from datetime import UTC, datetime
 from typing import Any
+
+from . import smb_negotiate
 
 logger = logging.getLogger("eeap.assessment.collectors.net")
 
@@ -242,6 +244,8 @@ def collect_host(ip: str, *, control_ids: list[str], timeout: float = DEFAULT_TI
         probes["snmp"] = _snmp_get_public(ip, timeout)
     if "NET-005" in wanted:
         probes["ntp"] = _probe_ntp(ip, timeout)
+    if wanted & {"WIN-001", "WIN-002"}:
+        probes["smb_negotiate"] = smb_negotiate.probe(ip, timeout)
     return {
         "collector": COLLECTOR_ID,
         "collector_version": COLLECTOR_VERSION,

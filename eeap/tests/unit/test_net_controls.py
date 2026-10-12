@@ -39,7 +39,7 @@ def test_net_controls_detect_common_exposures():
         ]
     }
     evaluation = net.evaluate(snapshot, None, NOW)
-    assert evaluation.evaluated_controls == list(net.NET_CONTROL_IDS)
+    assert evaluation.evaluated_controls == list(net.NETWORK_RUN_CONTROLS)
     assert {a["asset_id"] for a in evaluation.assets} == {"IP-10-0-0-10", "IP-10-0-0-11"}
 
     fail_statuses = {(r.control_id, r.status) for r in by_control(evaluation, "NET-001")

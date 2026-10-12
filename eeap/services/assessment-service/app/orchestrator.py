@@ -231,8 +231,10 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
         raise NetCollectionError("network assessment requires at least one IP in scope.ips")
     async with engine.connect() as conn:
         enabled = set((await conn.execute(text(
-            "SELECT control_id FROM assessment.controls WHERE module = 'NET' AND enabled"))).scalars())
-    control_ids = [c for c in net_controls.NET_CONTROL_IDS if c in enabled and (requested is None or c in requested)]
+            "SELECT control_id FROM assessment.controls WHERE enabled AND execution_site = 'server' "
+            "AND module IN ('NET', 'WIN')"))).scalars())
+    control_ids = [c for c in net_controls.NETWORK_RUN_CONTROLS
+                   if c in enabled and (requested is None or c in requested)]
     if not control_ids:
         raise NetCollectionError("no enabled NET controls were selected")
 

@@ -79,7 +79,8 @@ def test_port_scan_controls_classify_exposures():
     rows = {(r.control_id, r.subject_key): (r.status, r.severity) for r in evaluation.observations}
     assert rows == {
         ("NET-006", "tcp:22"): ("WARNING", "Medium"),
-        ("NET-006", "tcp:3389"): ("FAIL", "High"),
+        ("NET-006", "tcp:3389"): ("WARNING", "Medium"),
+        ("WIN-006", "tcp:3389"): ("FAIL", "Medium"),
         ("NET-007", "tcp:23"): ("FAIL", "High"),
         ("NET-008", "tcp:6379"): ("WARNING", "Medium"),
         ("NET-009", "tcp:2375"): ("FAIL", "High"),

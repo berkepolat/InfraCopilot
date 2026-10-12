@@ -69,8 +69,9 @@ export function RunAssessment() {
         <div className="panel">
           <h3>Network scan</h3>
           <p className="muted small">
-            Probes the listed IPs (must be inside the authorized ranges): DNS, TLS, SMB, SNMP, NTP and a TCP port
-            scan with service identification (NET-001 … NET-009).
+            Probes the listed IPs (must be inside the authorized ranges): DNS, TLS, SMB, SNMP, NTP, a TCP port
+            scan with service identification (NET-001 … NET-009) and Windows settings visible on the network:
+            SMB signing, SMBv1, RDP NLA and WinRM listeners (WIN-001, 002, 006, 008). No credentials are used.
           </p>
           <label className="field-label" htmlFor="net-targets">Target IPs</label>
           <textarea

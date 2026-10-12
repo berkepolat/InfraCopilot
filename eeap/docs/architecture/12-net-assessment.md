@@ -53,10 +53,27 @@ CIDR literals are not accepted in `targets` (pass individual IPs).
 | NET-003 SMB | TCP connect to 445 | Port open |
 | NET-004 SNMP | SNMPv2c GET sysDescr with community `public` | Default community accepted |
 | NET-005 NTP | NTP client mode query to UDP/123 | Service responds (WARNING) |
-| NET-006 Remote administration | Port scan: SSH 22, RDP 3389, WinRM 5985/5986, VNC 5900 | RDP without NLA (FAIL High); otherwise reachable (WARNING) |
+| NET-006 Remote administration | Port scan: SSH 22, RDP 3389, WinRM 5985/5986, VNC 5900 | Reachable (WARNING) |
 | NET-007 Cleartext protocols | Port scan: FTP 21, Telnet 23, rexec/rlogin/rsh 512–514 | Reachable (FAIL) |
 | NET-008 Data stores | Port scan: MSSQL, Oracle, MySQL, PostgreSQL, CouchDB, Redis, Elasticsearch, Memcached, MongoDB | Reachable (WARNING) |
 | NET-009 Control planes | Port scan: Docker 2375/2376, etcd 2379, Kubernetes API 6443, kubelet 10250 | Docker API or etcd without TLS (FAIL High); otherwise WARNING |
+
+### Windows settings observable on the network (no credentials)
+
+Network runs also evaluate the WIN controls whose configuration is visible on the wire
+(`execution_site = server`, migration `assessment_0005`). Hosts that do not expose the service get
+no observation (not applicable). The remaining WIN controls (WIN-003, 004, 005, 007, 009) need host
+access and stay import/agent only.
+
+| Control | Probe | FAIL / PASS |
+|---|---|---|
+| WIN-001 SMB signing | SMB2 NEGOTIATE (`collectors/smb_negotiate.py`), security mode | Signing not required (FAIL High) / required |
+| WIN-002 SMBv1 | SMB1 NEGOTIATE offering only `NT LM 0.12` | Dialect accepted (FAIL High) / rejected |
+| WIN-006 RDP NLA | Port scan RDP negotiation | NLA not required (FAIL) / required |
+| WIN-008 WinRM | Port scan | HTTP listener 5985 reachable (FAIL) / HTTPS 5986 only |
+
+Only NEGOTIATE messages are sent: no session setup, authentication, share enumeration or null
+sessions. NET-006 reports remote administration *reachability* only; NLA is evaluated by WIN-006.
 
 Port-scan findings use the stable subject `tcp:<port>`; a host without any matching port gets a
 single PASS (`remote-admin`, `cleartext`, `data-stores`, `control-planes`).
@@ -101,7 +118,7 @@ scores, roadmap and reports.
 
 | Service | Exposes | Expected result |
 |---|---|---|
-| `lab-legacy` | SSH 22, FTP 21, Telnet 23 | NET-006 WARNING, NET-007 FAIL (Telnet High) |
+| `lab-legacy` | SSH 22, FTP 21, Telnet 23, Samba 445 (SMBv1, signing off) | NET-006 WARNING, NET-007 FAIL (Telnet High), WIN-001 / WIN-002 FAIL |
 | `lab-redis` | Redis 6379 without authentication | NET-008 WARNING |
 | `lab-etcd` | etcd 2379 over plain HTTP | NET-009 FAIL High |
 
