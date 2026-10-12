@@ -64,6 +64,30 @@ Stored `factors`:
 }
 ```
 
+## 2a. Model v2 (active): exploitation evidence and network exposure
+
+v2 (migration `ai_0010`, ADR-0020) keeps the v1 structure and adds one factor, a second floor and
+finding-level exploitability. v1 stays in `ai.scoring_models`; its stored scores remain attributable.
+
+```
+base = 0.25·S + 0.20·C + 0.20·E + 0.05·B + 0.10·P + 0.10·R + 0.10·X
+```
+
+| Change | Detail |
+|--------|--------|
+| E per finding | A finding may carry its own exploitability in its evidence, overriding the control value. LIN-009 does: **1.0** if a CVE is in the uploaded CISA KEV catalog, otherwise `0.2 + 0.8 × max EPSS percentile` of its CVEs, **0.5** for CVEs EPSS has not scored, and the control value (0.8) when no EPSS file was uploaded. |
+| X network exposure | From the asset's open services (`network.exposure_observed`, sent by every NET run with a port scan). `0` when scanned with nothing open; otherwise `0.20 + 0.05 per additional service (max 4)` plus each exposed class once: control plane 0.30 (Docker, Kubernetes, kubelet, RabbitMQ management), data store 0.25 (databases, Redis, etcd, Elasticsearch …), remote admin 0.20 (SSH, RDP, VNC, WinRM), file sharing 0.15 (SMB, NFS, FTP, RPC …), cleartext login 0.15 (Telnet, FTP, r-services), directory 0.10 (Kerberos, LDAP, GC); capped at 1. Assets never port scanned (e.g. AD objects) use `exposure_unknown` = 0.3. |
+| KEV floor | An open, gated finding with a KEV-listed CVE never scores below **80** (`known_exploited_floor`). LIN-009 also raises such findings to at least High severity. |
+| B, P | Weights lowered (0.05, 0.10) to make room for E and X. |
+
+The exposed classes also yield a **suggested criticality** (control plane, data store or directory → High;
+remote admin or file sharing → Medium), shown on the Assets page next to the editor. It is never applied
+automatically; a manual criticality or tier is locked against discovery rules.
+
+`factors.inputs` records `known_exploited`, `exposure_source` (`port_scan` / `not_scanned`),
+`open_services` and `exposed_classes`, and `factors.floor` names the floor that was applied; the Risks
+page turns these into "why" labels.
+
 ## 3. Aggregate scores
 
 | Subject | Formula | Rationale |

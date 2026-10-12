@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 from pathlib import Path
@@ -108,3 +109,66 @@ def test_organization_score_components():
 
 def test_organization_without_assets_is_zero():
     assert scoring.score_organization(MODEL, [], 0).score == 0
+
+
+def _migration_v2() -> "scoring.ScoringModel":
+    source = (ROOT / "services" / "ai-engine" / "migrations" / "versions" / "ai_0010_exposure_scoring.py").read_text()
+    node = next(n for n in ast.parse(source).body
+                if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", None) == "V2_WEIGHTS")
+    return scoring.ScoringModel("v2", ast.literal_eval(node.value))
+
+
+V2 = _migration_v2()
+LEGACY_HOST = [{"port": 21, "service": "ftp"}, {"port": 22, "service": "ssh"}, {"port": 23, "service": "telnet"},
+               {"port": 445, "service": "smb"}]
+
+
+def test_v2_factor_weights_sum_to_one_and_v1_has_no_exposure_factor():
+    assert sum(V2.factor_weights.values()) == pytest.approx(1.0)
+    assert "X" in V2.factor_weights and "X" not in MODEL.factor_weights
+    assert "X" not in scoring.score_finding(MODEL, _inputs(services=LEGACY_HOST)).factors["normalized"]
+
+
+def test_network_exposure_grows_with_sensitive_services():
+    assert scoring.network_exposure([]) == (0.0, [])
+    web, classes = scoring.network_exposure([{"port": 443, "service": "https"}])
+    assert web == 0.2 and classes == []
+    legacy, classes = scoring.network_exposure(LEGACY_HOST)
+    assert classes == ["remote_admin", "file_sharing", "cleartext_login"]
+    assert legacy == pytest.approx(0.2 + 3 * 0.05 + 0.2 + 0.15 + 0.15)
+    assert scoring.network_exposure([{"port": 2375, "service": "docker"}, {"port": 6379, "service": "redis"},
+                                     {"port": 22, "service": "ssh"}])[0] == 1.0
+    assert scoring.network_exposure([{"port": 16379, "service": "redis"}])[1] == ["data_store"]
+
+
+@pytest.mark.parametrize("services,expected", [
+    ([{"port": 6379, "service": "redis"}], "High"), ([{"port": 389, "service": "ldap"}], "High"),
+    ([{"port": 22, "service": "ssh"}], "Medium"), ([{"port": 443, "service": "https"}], None), ([], None)])
+def test_suggested_criticality(services, expected):
+    assert scoring.suggested_criticality(services) == expected
+
+
+def test_v2_exposure_factor_unknown_none_and_exposed():
+    unknown = scoring.score_finding(V2, _inputs())
+    assert unknown.factors["normalized"]["X"] == 0.3
+    assert unknown.factors["inputs"]["exposure_source"] == "not_scanned"
+    closed = scoring.score_finding(V2, _inputs(services=[]))
+    exposed = scoring.score_finding(V2, _inputs(services=LEGACY_HOST))
+    assert closed.factors["normalized"]["X"] == 0.0
+    assert exposed.factors["inputs"]["exposed_classes"] == ["remote_admin", "file_sharing", "cleartext_login"]
+    assert closed.score < unknown.score < exposed.score
+
+
+def test_v2_known_exploited_floor():
+    weak = dict(severity="Medium", criticality="Low", exploitability=1.0, privilege_impact=0.0, affected_count=1,
+                propagation=None, services=[])
+    plain = scoring.score_finding(V2, _inputs(**weak))
+    kev = scoring.score_finding(V2, _inputs(**weak, known_exploited=True))
+    assert plain.score < 80 and plain.factors["floor_applied"] is False
+    assert kev.score == 80 and kev.factors["floor"] == "known_exploited"
+    assert scoring.score_finding(V2, _inputs(**weak, known_exploited=True, status="PASS")).score == 0
+    assert scoring.score_finding(MODEL, _inputs(**weak, known_exploited=True)).score == plain_v1(weak)
+
+
+def plain_v1(weak: dict) -> int:
+    return scoring.score_finding(MODEL, _inputs(**weak)).score

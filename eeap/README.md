@@ -32,7 +32,10 @@ packages with known vulnerabilities, matched offline against uploaded OSV data
 (**LIN-001 … LIN-009**, [doc 18](docs/architecture/18-linux-ssh.md)).
 AD runs also feed the exposure graph; the Relationship Engine computes Tier-0 reachability and
 risk concentration areas, which drive the propagation factor R of the risk score
-([doc 13](docs/architecture/13-graph-analytics.md)). Correlation rules combine open findings and
+([doc 13](docs/architecture/13-graph-analytics.md)). Scoring model v2 also weighs uploaded exploitation
+evidence (CISA KEV, EPSS) for vulnerable packages, each host's network exposure from the port scan and the
+asset criticality set on the Assets page; the Risks page shows why each finding ranks where it does
+([ADR-0020](docs/adr/0020-exploitation-and-exposure-in-risk-scoring.md)). Correlation rules combine open findings and
 graph facts into risk scenarios ([doc 14](docs/architecture/14-correlation.md)), which feed a
 prioritized remediation roadmap and an ATT&CK exposure view ([doc 15](docs/architecture/15-remediation-mitre.md)).
 Executive, technical, roadmap and ATT&CK reports are rendered as PDF, HTML and JSON with the
@@ -89,7 +92,7 @@ Then open `https://localhost/` (self-signed certificate in dev). Roles: `admin`,
 Findings in the Standard Finding Format (JSON) or CSV are imported through the API; the
 original file is kept in MinIO (`eeap-imports`), rows are validated, deduplicated by
 fingerprint (`asset_id | control_id | subject_key`) and scored automatically by the AI
-Engine (model v1, [doc 08](docs/architecture/08-risk-scoring-model.md)). Samples:
+Engine (model v2, [doc 08](docs/architecture/08-risk-scoring-model.md)). Samples:
 [`docs/examples/`](docs/examples/).
 
 ```bash
@@ -141,7 +144,8 @@ For Linux hosts, install `secrets/linux_ssh_key.pub` on each target with
 assessment containers ([doc 18](docs/architecture/18-linux-ssh.md)). The lab already does this for
 `lab-legacy`. For LIN-009, download the OSV archive of each distribution in use (e.g.
 `https://osv-vulnerabilities.storage.googleapis.com/Debian/all.zip`) and upload it on
-**Assess → Vulnerability data**; repeat monthly.
+**Assess → Vulnerability data**; repeat monthly. The CISA KEV JSON and the EPSS CSV, uploaded on the same
+page, rank the vulnerable packages by real-world exploitation.
 
 For development there is a Samba AD **test lab** seeded with configuration weaknesses
 (never use it outside development):

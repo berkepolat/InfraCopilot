@@ -84,6 +84,19 @@ Hosts with an older posture script (no package list), an unsupported distributio
 their release are not evaluated and keep their open LIN-009 findings; run stats show
 `package_vulnerabilities` per status.
 
+**Exploitation evidence (optional, recommended).** Upload on the same page, unchanged:
+
+| Source | File (≈ size) | Effect |
+|---|---|---|
+| CISA KEV | `https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json` (2 MB) | Packages with a KEV-listed CVE are marked "actively exploited", raised to at least High and never score below 80 |
+| FIRST EPSS | `epss_scores-current.csv.gz`, linked from `https://www.first.org/epss/data_stats` (3 MB) | Exploitability = `0.2 + 0.8 × highest EPSS percentile` of the package's CVEs |
+
+Each upload replaces the previous KEV or EPSS data; new values are applied to LIN-009 findings on the next
+scan. The finding evidence shows `known_exploited`, `ransomware`, `epss`, `epss_percentile`,
+`exploitability` and `advisory_severity` (the distribution's rating before the KEV raise). See
+[ADR-0020](../adr/0020-exploitation-and-exposure-in-risk-scoring.md) and
+[doc 08 §2a](08-risk-scoring-model.md).
+
 ## Target setup
 
 1. Generate the scanner key (`scripts/generate-secrets.sh` creates `secrets/linux_ssh_key` and

@@ -33,20 +33,43 @@ GATING_STATUS = ("FAIL", "WARNING")
 async def upsert_finding_fact(conn: AsyncConnection, data: dict, occurred_at: datetime) -> bool:
     result = await conn.execute(text("""
         INSERT INTO ai.finding_facts (finding_id, asset_id, control_id, category, severity, status, lifecycle_state,
-                                      subject_key, exploitability, privilege_impact, source_occurred_at)
+                                      subject_key, exploitability, known_exploited, privilege_impact,
+                                      source_occurred_at)
         VALUES (CAST(:finding_id AS uuid), :asset_id, :control_id, :category, :severity, :status, :lifecycle_state,
-                :subject_key, :exploitability, :privilege_impact, :occurred_at)
+                :subject_key, :exploitability, :known_exploited, :privilege_impact, :occurred_at)
         ON CONFLICT (finding_id) DO UPDATE SET
             severity = EXCLUDED.severity, status = EXCLUDED.status, lifecycle_state = EXCLUDED.lifecycle_state,
             category = EXCLUDED.category, exploitability = EXCLUDED.exploitability,
+            known_exploited = EXCLUDED.known_exploited,
             privilege_impact = EXCLUDED.privilege_impact, source_occurred_at = EXCLUDED.source_occurred_at,
             updated_at = now()
         WHERE ai.finding_facts.source_occurred_at <= EXCLUDED.source_occurred_at
         RETURNING finding_id"""),
         {**{k: data.get(k) for k in ("finding_id", "asset_id", "control_id", "category", "severity", "status",
                                      "lifecycle_state", "exploitability", "privilege_impact")},
+         "known_exploited": bool(data.get("known_exploited")),
          "subject_key": data.get("subject_key") or "", "occurred_at": occurred_at})
     return result.first() is not None
+
+
+async def upsert_exposure_facts(conn: AsyncConnection, data: dict, occurred_at: datetime) -> list[str]:
+    """Open services per scanned asset (network.exposure_observed); returns the assets that changed."""
+    changed = []
+    for host in data.get("hosts") or []:
+        services = [{"port": int(s["port"]), "service": str(s.get("service") or "unknown")}
+                    for s in host.get("services") or [] if isinstance(s.get("port"), int)]
+        row = (await conn.execute(text("""
+            INSERT INTO ai.exposure_facts (asset_id, ip, services, run_id, source_occurred_at)
+            VALUES (:asset_id, CAST(:ip AS inet), CAST(:services AS jsonb), CAST(:run AS uuid), :t)
+            ON CONFLICT (asset_id) DO UPDATE SET ip = EXCLUDED.ip, services = EXCLUDED.services,
+                run_id = EXCLUDED.run_id, source_occurred_at = EXCLUDED.source_occurred_at, updated_at = now()
+            WHERE ai.exposure_facts.source_occurred_at <= EXCLUDED.source_occurred_at
+            RETURNING asset_id"""),
+            {"asset_id": host["asset_id"], "ip": host.get("ip"), "services": json.dumps(services),
+             "run": data.get("run_id"), "t": occurred_at})).first()
+        if row is not None:
+            changed.append(host["asset_id"])
+    return changed
 
 
 async def upsert_asset_fact(conn: AsyncConnection, event_type: str, data: dict, occurred_at: datetime) -> bool:
@@ -148,6 +171,10 @@ class RecomputeStats:
     changed: dict[str, int] = field(default_factory=dict)
 
 
+def _json(value):
+    return json.loads(value) if isinstance(value, str) else value
+
+
 async def _score_findings(conn: AsyncConnection, model: ScoringModel, where: str, params: dict) -> dict:
     # A finding about a directory object (DN subject) takes that object's graph context; anything else takes
     # its asset's. Once an analysis exists, a subject without a fact has no path to Tier 0 (R = 0).
@@ -158,6 +185,7 @@ async def _score_findings(conn: AsyncConnection, model: ScoringModel, where: str
             WHERE status = ANY(:gs) AND lifecycle_state = ANY(:gl) GROUP BY control_id)
         SELECT f.finding_id::text AS finding_id, f.asset_id, f.control_id, f.severity, f.status, f.lifecycle_state,
                f.exploitability::float AS exploitability, f.privilege_impact::float AS privilege_impact,
+               f.known_exploited, x.services,
                a.criticality, a.tier, coalesce(b.affected, 0) AS affected,
                CASE WHEN position('dc=' in lower(f.subject_key)) > 0 THEN gd.propagation_score
                     ELSE ga.propagation_score END::float AS propagation,
@@ -168,6 +196,7 @@ async def _score_findings(conn: AsyncConnection, model: ScoringModel, where: str
         LEFT JOIN breadth b ON b.control_id = f.control_id
         LEFT JOIN ai.graph_facts gd ON gd.subject_kind = 'dn' AND gd.subject_key = lower(f.subject_key)
         LEFT JOIN ai.graph_facts ga ON ga.subject_kind = 'asset' AND ga.subject_key = f.asset_id
+        LEFT JOIN ai.exposure_facts x ON x.asset_id = f.asset_id
         WHERE {where}"""), {**params, "gs": list(GATING_STATUS), "gl": list(GATING_LIFECYCLE)})).mappings().all()
     results = {
         r["finding_id"]: score_finding(model, FindingInputs(
@@ -175,7 +204,8 @@ async def _score_findings(conn: AsyncConnection, model: ScoringModel, where: str
             criticality=r["criticality"], exploitability=r["exploitability"],
             privilege_impact=r["privilege_impact"], affected_count=int(r["affected"]),
             propagation=(r["propagation"] or 0.0) if graph_available else None,
-            is_tier0=r["tier"] == "Tier0" or r["graph_tier0"]))
+            is_tier0=r["tier"] == "Tier0" or r["graph_tier0"], known_exploited=r["known_exploited"],
+            services=_json(r["services"])))
         for r in rows
     }
     return {"results": results, "assets": {r["asset_id"] for r in rows}}

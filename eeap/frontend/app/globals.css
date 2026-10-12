@@ -122,6 +122,11 @@ td.wrap { max-width: 420px; overflow-wrap: anywhere; }
 .badge.High { background: var(--high); }
 .badge.Medium { background: var(--medium); }
 .badge.Low, .badge.Informational { background: var(--low); }
+.factors { display: flex; flex-wrap: wrap; gap: 4px; }
+.factor { font-size: 11px; padding: 1px 7px; border-radius: 9px; border: 1px solid var(--border); white-space: nowrap; }
+.factor.hot { border-color: var(--critical); color: var(--critical); }
+td select { padding: 4px 6px; font-size: 13px; }
+td button { margin-top: 0; padding: 4px 10px; font-size: 12px; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 10px; vertical-align: middle; }
 .dot.Critical { background: var(--critical); }
 .dot.High { background: var(--high); }

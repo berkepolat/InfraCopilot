@@ -5,8 +5,11 @@ import fnmatch
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from .. import vulns
+
 LINUX_CONTROLS = tuple(f"LIN-{n:03d}" for n in range(1, 10))
 VULN_DATA_MAX_AGE_DAYS = 30
+KEV_MIN_SEVERITY = "High"
 EOL_WARNING = timedelta(days=180)
 METADATA_MAX_AGE_DAYS = 30
 MAX_AUTH_TRIES = 6
@@ -291,10 +294,16 @@ def lin009_vulnerable_packages(ctx) -> None:
     for group in data["vulnerable"]:
         cves = group["cves"]
         listed = ", ".join(cves[:5]) + (f" and {len(cves) - 5} more" if len(cves) > 5 else "")
-        ctx.emit("LIN-009", "FAIL", subject=f"pkg:{group['package']}", severity=group["severity"],
-                 summary=(f"{ctx.ip}: {group['package']} {group['installed']} has {group['advisory_count']} known "
-                          f"vulnerabilities fixed in {group['fixed_version']}" + (f" ({listed})" if cves else "")),
-                 ecosystem=data["ecosystem"], data_as_of=data["data_as_of"],
+        exploited = group.get("known_exploited") or []
+        severity = group["severity"]
+        if exploited and vulns.SEVERITY_ORDER.get(severity, 0) < vulns.SEVERITY_ORDER[KEV_MIN_SEVERITY]:
+            severity = KEV_MIN_SEVERITY
+        summary = (f"{ctx.ip}: {group['package']} {group['installed']} has {group['advisory_count']} known "
+                   f"vulnerabilities fixed in {group['fixed_version']}" + (f" ({listed})" if cves else ""))
+        if exploited:
+            summary += f"; actively exploited (CISA KEV): {', '.join(exploited[:5])}"
+        ctx.emit("LIN-009", "FAIL", subject=f"pkg:{group['package']}", severity=severity, summary=summary,
+                 ecosystem=data["ecosystem"], data_as_of=data["data_as_of"], advisory_severity=group["severity"],
                  **{k: v for k, v in group.items() if k != "severity"})
     if not data["vulnerable"]:
         ctx.emit("LIN-009", "PASS", subject="packages",

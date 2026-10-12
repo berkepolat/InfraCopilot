@@ -240,16 +240,31 @@ async def get_import(import_id: uuid.UUID, _: Principal = Depends(require_permis
 # ------------------------------------------------------------------------------- vulnerability feeds
 
 FEED_FILENAME = r"^[\w.:\- ()]{1,200}$"
+FEED_CONTENT_TYPES = ("application/zip", "application/x-zip-compressed", "application/octet-stream",
+                      "application/json", "application/gzip", "application/x-gzip", "text/csv")
+FEED_SNIFF_BYTES = 16
 
 
-async def _zip_stream(chunks):
+async def _feed_stream(chunks, detected: dict):
+    """Passes the upload through, rejecting it once the first bytes show it is no supported feed."""
     head = b""
     async for chunk in chunks:
-        if len(head) < 4:
-            head += chunk[:4]
-            if len(head) >= 4 and not head.startswith(b"PK\x03\x04"):
-                raise HTTPException(415, detail="the file is not a zip archive")
+        if "kind" not in detected:
+            head += chunk[:FEED_SNIFF_BYTES]
+            if len(head) >= FEED_SNIFF_BYTES:
+                detected["kind"] = _sniff_or_reject(head)
         yield chunk
+    if "kind" not in detected and head:
+        detected["kind"] = _sniff_or_reject(head)
+
+
+def _sniff_or_reject(head: bytes) -> str:
+    from .exploit_data import sniff
+
+    kind = sniff(head)
+    if kind is None:
+        raise HTTPException(415, detail="upload an OSV all.zip, the CISA KEV JSON or an EPSS CSV (.csv or .csv.gz)")
+    return kind
 
 
 @router.post("/vulnerability-feeds", status_code=202)
@@ -260,54 +275,62 @@ async def upload_vulnerability_feed(
     engine: AsyncEngine = Depends(get_engine),
     store: ObjectStore = Depends(get_store),
 ):
-    """Uploads an OSV all.zip (Alpine, Debian, Ubuntu, Rocky Linux, AlmaLinux); imported asynchronously."""
+    """Uploads vulnerability data, imported asynchronously: an OSV all.zip (Alpine, Debian, Ubuntu,
+    Rocky Linux, AlmaLinux), the CISA KEV catalog JSON or an EPSS score CSV (optionally gzipped)."""
     from .storage import ObjectTooLarge
     from .vuln_feeds import FEED_EVENT
 
     content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-    if content_type not in ("application/zip", "application/x-zip-compressed", "application/octet-stream"):
-        raise HTTPException(415, detail="upload the OSV all.zip with Content-Type application/zip")
+    if content_type not in FEED_CONTENT_TYPES:
+        raise HTTPException(415, detail="unsupported Content-Type for vulnerability data")
     if int(request.headers.get("content-length") or 0) > settings.vuln_feed_max_bytes:
         raise HTTPException(413, detail="feed file too large")
     feed_id = str(uuid.uuid4())
     now = datetime.now(UTC)
-    object_key = f"vuln-feeds/{now:%Y/%m}/{feed_id}.zip"
+    object_key = f"vuln-feeds/{now:%Y/%m}/{feed_id}"
+    detected: dict[str, str] = {}
     try:
         size, sha256 = await store.put_stream(
-            settings.imports_bucket, object_key, _zip_stream(request.stream()), "application/zip",
-            {"feed-id": feed_id, "uploaded-by": principal.subject}, settings.vuln_feed_max_bytes)
+            settings.imports_bucket, object_key, _feed_stream(request.stream(), detected),
+            "application/octet-stream", {"feed-id": feed_id, "uploaded-by": principal.subject},
+            settings.vuln_feed_max_bytes)
     except ObjectTooLarge as exc:
         raise HTTPException(413, detail="feed file too large") from exc
     if size == 0:
         raise HTTPException(422, detail="feed file is empty")
+    kind = detected["kind"]
 
     async with engine.begin() as conn:
         await conn.execute(text(
             "INSERT INTO assessment.vuln_feeds (feed_id, filename, bucket, object_key, sha256, size_bytes, "
-            "uploaded_by) VALUES (CAST(:id AS uuid), :name, :bucket, :key, :sha, :size, :by)"),
+            "uploaded_by, kind) VALUES (CAST(:id AS uuid), :name, :bucket, :key, :sha, :size, :by, :kind)"),
             {"id": feed_id, "name": filename, "bucket": settings.imports_bucket, "key": object_key, "sha": sha256,
-             "size": size, "by": principal.subject})
+             "size": size, "by": principal.subject, "kind": kind})
         await enqueue_event(conn, SCHEMA, IMPORT_STREAM, new_envelope(
             event_type=FEED_EVENT, source=settings.service_name, subject=feed_id,
             actor={"type": "user", "id": principal.subject},
-            data={"feed_id": feed_id, "size_bytes": size}))
-    return {"feed_id": feed_id, "status": "queued", "sha256": sha256, "size_bytes": size}
+            data={"feed_id": feed_id, "size_bytes": size, "kind": kind}))
+    return {"feed_id": feed_id, "kind": kind, "status": "queued", "sha256": sha256, "size_bytes": size}
 
 
 @router.get("/vulnerability-feeds")
 async def list_vulnerability_feeds(_: Principal = Depends(require_permission("assessments:read")),
                                    engine: AsyncEngine = Depends(get_engine)):
-    """Imported distributions with data age, and the most recent uploads."""
+    """Imported distributions and exploit data (KEV, EPSS) with data age, and the most recent uploads."""
     async with engine.connect() as conn:
         ecosystems = [dict(r) for r in (await conn.execute(text(
             "SELECT e.ecosystem, e.ranges, e.newest_modified, e.imported_at, e.feed_id, f.filename "
             "FROM assessment.vuln_ecosystems e JOIN assessment.vuln_feeds f USING (feed_id) "
             "ORDER BY e.ecosystem"))).mappings()]
+        exploit_data = [dict(r) for r in (await conn.execute(text(
+            "SELECT DISTINCT ON (kind) kind, feed_id, filename, records, newest_modified, data_version, "
+            "completed_at AS imported_at FROM assessment.vuln_feeds WHERE kind IN ('kev', 'epss') "
+            "AND status = 'completed' ORDER BY kind, completed_at DESC"))).mappings()]
         feeds = [dict(r) for r in (await conn.execute(text(
-            "SELECT feed_id, filename, sha256, size_bytes, status, ecosystems, records, ranges, newest_modified, "
-            "error, uploaded_by, created_at, completed_at FROM assessment.vuln_feeds "
+            "SELECT feed_id, kind, filename, sha256, size_bytes, status, ecosystems, records, ranges, "
+            "newest_modified, error, uploaded_by, created_at, completed_at FROM assessment.vuln_feeds "
             "ORDER BY created_at DESC LIMIT 20"))).mappings()]
-    return {"ecosystems": ecosystems, "feeds": feeds}
+    return {"ecosystems": ecosystems, "exploit_data": exploit_data, "feeds": feeds}
 
 
 # ------------------------------------------------------------------------------------ network services

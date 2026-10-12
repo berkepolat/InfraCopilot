@@ -56,10 +56,33 @@ export type Asset = {
   hostname: string;
   asset_type: string;
   criticality: string;
+  criticality_locked?: boolean;
   tier: string;
   environment: string;
   owner: string | null;
   status: string;
+};
+
+export type Exposure = {
+  value: number;
+  classes: string[];
+  open_services: number;
+  services: { port: number; service: string }[];
+  suggested_criticality: Rating | null;
+};
+
+export type AssetExposure = { asset_id: string; ip: string | null; observed_at: string; exposure: Exposure | null };
+
+export type TopAsset = {
+  asset_id: string;
+  score: number;
+  rating: Rating;
+  hostname: string | null;
+  criticality: string | null;
+  tier: string | null;
+  known_exploited: number;
+  exposure: Exposure | null;
+  factors: { open_findings?: number; contributing?: number };
 };
 
 export type Control = {
@@ -131,7 +154,27 @@ export type TopFinding = {
   status: string;
   lifecycle_state: string;
   subject_key: string;
-  factors: { floor_applied: boolean; normalized: Record<string, number> };
+  known_exploited?: boolean;
+  criticality?: string | null;
+  tier?: string | null;
+  factors: FindingFactors;
+};
+
+export type FindingFactors = {
+  floor_applied: boolean;
+  floor?: "severity" | "known_exploited";
+  normalized: Record<string, number>;
+  inputs?: {
+    criticality?: string;
+    exploitability?: number;
+    known_exploited?: boolean;
+    is_tier0?: boolean;
+    propagation?: number | null;
+    affected_count?: number;
+    exposure_source?: "port_scan" | "not_scanned";
+    open_services?: number;
+    exposed_classes?: string[];
+  };
 };
 
 export type AssessmentRun = {
@@ -209,8 +252,18 @@ export type VulnerabilityFeeds = {
     feed_id: string;
     filename: string;
   }[];
+  exploit_data: {
+    kind: "kev" | "epss";
+    feed_id: string;
+    filename: string;
+    records: number;
+    newest_modified: string | null;
+    data_version: string | null;
+    imported_at: string;
+  }[];
   feeds: {
     feed_id: string;
+    kind: "osv" | "kev" | "epss";
     filename: string;
     sha256: string;
     size_bytes: number;

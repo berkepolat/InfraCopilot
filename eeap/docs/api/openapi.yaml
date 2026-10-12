@@ -621,18 +621,28 @@ paths:
     post:
       tags: [Assessments]
       x-permission: assessments:manage
-      summary: Upload an OSV all.zip for LIN-009 (streamed, up to 1 GiB); imported asynchronously
+      summary: Upload vulnerability data for LIN-009 (streamed, up to 1 GiB); imported asynchronously
       description: >
-        Upload the family archive unchanged, e.g. https://osv-vulnerabilities.storage.googleapis.com/Debian/all.zip
-        (also Ubuntu, Alpine, Rocky Linux, AlmaLinux). The per-release folders (Debian:12, Ubuntu:22.04:LTS,
-        Alpine:v3.20) are no longer updated by OSV. An import replaces the data of every release the archive
-        covers; the uploaded object is deleted after import.
+        The kind is detected from the content. An OSV family archive, uploaded unchanged, e.g.
+        https://osv-vulnerabilities.storage.googleapis.com/Debian/all.zip (also Ubuntu, Alpine, Rocky Linux,
+        AlmaLinux); the per-release folders (Debian:12, Ubuntu:22.04:LTS, Alpine:v3.20) are no longer updated by
+        OSV. An OSV import replaces the data of every release the archive covers. The CISA KEV catalog JSON or an
+        EPSS score CSV (optionally gzipped) replaces the previous KEV or EPSS data and re-ranks LIN-009 findings
+        on the next scan (ADR-0020). The uploaded object is deleted after import.
       parameters:
         - {name: filename, in: query, schema: {type: string, maxLength: 200, default: all.zip}}
       requestBody:
         required: true
         content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
           application/zip:
+            schema: {type: string, format: binary}
+          application/json:
+            schema: {type: string, format: binary}
+          application/gzip:
+            schema: {type: string, format: binary}
+          text/csv:
             schema: {type: string, format: binary}
       responses:
         '202':
@@ -643,11 +653,12 @@ paths:
                 type: object
                 properties:
                   feed_id: {type: string, format: uuid}
+                  kind: {type: string, enum: [osv, kev, epss]}
                   status: {type: string, enum: [queued]}
                   sha256: {type: string}
                   size_bytes: {type: integer}
         '413': {description: Larger than 1 GiB}
-        '415': {description: Not a zip archive}
+        '415': {description: Neither an OSV zip, the KEV JSON nor an EPSS CSV}
         '422': {description: Empty body}
     get:
       tags: [Assessments]
@@ -961,7 +972,14 @@ paths:
       x-permission: risk:read
       parameters: [{name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 20}}]
       responses:
-        '200': {description: Assets ordered by score}
+        '200': {description: "Assets ordered by score, with network exposure (open services, exposed service classes, suggested criticality) and the count of open actively exploited findings"}
+  /risk/exposure:
+    get:
+      tags: [Risk]
+      x-permission: risk:read
+      summary: Network exposure of every port-scanned asset (scoring factor X) with a suggested criticality
+      responses:
+        '200': {description: "items: asset_id, ip, observed_at, exposure {value, classes, open_services, services, suggested_criticality}"}
   /risk/scenarios:
     get:
       tags: [Risk]

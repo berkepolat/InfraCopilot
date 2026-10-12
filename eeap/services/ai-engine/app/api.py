@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Literal
 
@@ -13,6 +14,7 @@ from eeap_shared.utils.service import get_engine
 
 from .config import settings
 from .engine import GATING_LIFECYCLE, GATING_STATUS, mark_dirty
+from .scoring import network_exposure, suggested_criticality
 
 router = APIRouter(tags=["Risk"])
 
@@ -67,7 +69,7 @@ async def top_findings(limit: int = Query(20, ge=1, le=200), min_score: int = Qu
         rows = await conn.execute(text("""
             SELECT s.subject_id AS finding_id, s.score, s.rating, s.factors, s.computed_at,
                    f.asset_id, f.control_id, f.category, f.severity, f.status, f.lifecycle_state, f.subject_key,
-                   a.hostname, a.criticality, a.tier
+                   f.known_exploited, a.hostname, a.criticality, a.tier
             FROM ai.risk_scores s
             JOIN ai.finding_facts f ON f.finding_id::text = s.subject_id
             LEFT JOIN ai.asset_facts a ON a.asset_id = f.asset_id
@@ -83,11 +85,39 @@ async def top_assets(limit: int = Query(20, ge=1, le=200),
     async with engine.connect() as conn:
         rows = await conn.execute(text("""
             SELECT s.subject_id AS asset_id, s.score, s.rating, s.factors, s.computed_at,
-                   a.hostname, a.criticality, a.tier, a.environment, a.owner
+                   a.hostname, a.criticality, a.tier, a.environment, a.owner, x.services,
+                   (SELECT count(*) FROM ai.finding_facts f WHERE f.asset_id = s.subject_id AND f.known_exploited
+                      AND f.status = ANY(:gs) AND f.lifecycle_state = ANY(:gl)) AS known_exploited
             FROM ai.risk_scores s LEFT JOIN ai.asset_facts a ON a.asset_id = s.subject_id
+            LEFT JOIN ai.exposure_facts x ON x.asset_id = s.subject_id
             WHERE s.is_current AND s.subject_type = 'asset'
-            ORDER BY s.score DESC, s.subject_id LIMIT :limit"""), {"limit": limit})
-        return {"items": [dict(r) for r in rows.mappings()]}
+            ORDER BY s.score DESC, s.subject_id LIMIT :limit"""),
+            {"limit": limit, "gs": list(GATING_STATUS), "gl": list(GATING_LIFECYCLE)})
+        return {"items": [_with_exposure(dict(r)) for r in rows.mappings()]}
+
+
+def _with_exposure(row: dict) -> dict:
+    services = row.pop("services", None)
+    if isinstance(services, str):
+        services = json.loads(services)
+    if services is None:
+        row["exposure"] = None
+        return row
+    value, classes = network_exposure(services)
+    row["exposure"] = {"value": value, "classes": classes, "open_services": len(services),
+                       "services": services, "suggested_criticality": suggested_criticality(services)}
+    return row
+
+
+@router.get("/risk/exposure")
+async def asset_exposure(_: Principal = Depends(require_permission("risk:read")),
+                         engine: AsyncEngine = Depends(get_engine)):
+    """Network exposure per port-scanned asset, with the criticality its exposed services suggest."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(text(
+            "SELECT asset_id, host(ip) AS ip, services, source_occurred_at AS observed_at "
+            "FROM ai.exposure_facts ORDER BY asset_id"))
+        return {"items": [_with_exposure(dict(r)) for r in rows.mappings()]}
 
 
 @router.get("/risk/summary")
@@ -106,9 +136,11 @@ async def summary(_: Principal = Depends(require_permission("risk:read")),
         scenarios = (await conn.execute(
             text("SELECT count(*) FROM ai.risk_scenarios WHERE status = 'active'"))).scalar()
         top = await _scenarios(conn, "active", 5)
+        model = (await conn.execute(
+            text("SELECT model_version FROM ai.scoring_models WHERE is_active"))).scalar()
     return {"exposure_score": dict(org) if org else None, "open_by_rating": by_rating,
             "active_scenarios": scenarios, "top_scenarios": top,
-            "scoring_model": settings.scoring_model_version, "llm_provider": settings.ai_llm_provider}
+            "scoring_model": model or settings.scoring_model_version, "llm_provider": settings.ai_llm_provider}
 
 
 ScenarioStatus = Literal["active", "mitigated", "dismissed"]

@@ -5,6 +5,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -41,12 +42,28 @@ async def load_controls(conn: AsyncConnection) -> dict[str, ControlMeta]:
     return {r.control_id: ControlMeta(**r._mapping) for r in rows}
 
 
+def exploit_context(evidence: Any) -> tuple[float | None, bool]:
+    """Finding-level exploitability (e.g. LIN-009 from KEV/EPSS) that overrides the control's value."""
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except ValueError:
+            evidence = None
+    if not isinstance(evidence, dict):
+        return None, False
+    value = evidence.get("exploitability")
+    exploitability = float(value) if isinstance(value, int | float) and 0 <= value <= 1 else None
+    return exploitability, bool(evidence.get("known_exploited"))
+
+
 def _event_data(row: dict, control: ControlMeta, trigger: str, run_id: str | None) -> dict:
+    exploitability, known_exploited = exploit_context(row.get("evidence"))
     return {
         "finding_id": str(row["finding_id"]), "asset_id": row["asset_id"], "control_id": row["control_id"],
         "category": row["category"], "severity": row["severity"], "status": row["status"],
         "lifecycle_state": row["lifecycle_state"], "subject_key": row["subject_key"],
-        "exploitability": control.exploitability, "privilege_impact": control.privilege_impact,
+        "exploitability": control.exploitability if exploitability is None else exploitability,
+        "known_exploited": known_exploited, "privilege_impact": control.privilege_impact,
         "run_id": run_id, "trigger": trigger,
     }
 
@@ -100,8 +117,8 @@ async def upsert_observations(conn: AsyncConnection, rows: list[ImportRow], *, r
             "source_tool": row.source_tool, "run": run_id, "observed": observed_at,
         }
         existing = (await conn.execute(
-            text("SELECT finding_id, status, severity, lifecycle_state, last_seen_at FROM assessment.findings "
-                 "WHERE fingerprint = :fp FOR UPDATE"), {"fp": fp})).mappings().first()
+            text("SELECT finding_id, status, severity, lifecycle_state, last_seen_at, evidence "
+                 "FROM assessment.findings WHERE fingerprint = :fp FOR UPDATE"), {"fp": fp})).mappings().first()
         if existing is not None and existing["last_seen_at"] > observed_at:
             outcome["stale"] += 1
             continue
@@ -131,8 +148,10 @@ async def upsert_observations(conn: AsyncConnection, rows: list[ImportRow], *, r
                      "THEN coalesce(resolved_at, now()) END WHERE fingerprint = :fp "
                      f"RETURNING {FINDING_COLUMNS.replace('f.', '')}"),
                 {**values, "state": state})).mappings().one()
-            changed = (existing["status"], existing["severity"], existing["lifecycle_state"]) != \
-                      (current["status"], current["severity"], current["lifecycle_state"])
+            changed = (existing["status"], existing["severity"], existing["lifecycle_state"],
+                       exploit_context(existing["evidence"])) != \
+                      (current["status"], current["severity"], current["lifecycle_state"],
+                       exploit_context(current["evidence"]))
             if not changed:
                 outcome["unchanged"] += 1
                 continue

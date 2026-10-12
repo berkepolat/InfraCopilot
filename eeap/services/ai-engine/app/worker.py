@@ -14,7 +14,8 @@ from eeap_shared.utils.runtime import Subscription
 from eeap_shared.utils.settings import ServiceSettings
 
 from .config import SCHEMA
-from .engine import mark_dirty, recompute, replace_graph_facts, upsert_asset_fact, upsert_finding_fact
+from .engine import mark_dirty, recompute, replace_graph_facts, upsert_asset_fact, upsert_exposure_facts, \
+    upsert_finding_fact
 
 logger = logging.getLogger("eeap.ai.worker")
 
@@ -23,6 +24,7 @@ RECOMPUTE_INTERVAL_SECONDS = 2.0
 FINDING_EVENTS = {"finding.created", "finding.updated", "finding.resolved"}
 ASSET_EVENTS = {"asset.created", "asset.updated", "asset.criticality_changed"}
 GRAPH_ANALYSIS_EVENT = "graph.analysis_completed"
+EXPOSURE_EVENT = "network.exposure_observed"
 
 
 def scoring_handler(engine: AsyncEngine, redis: Redis):
@@ -30,13 +32,18 @@ def scoring_handler(engine: AsyncEngine, redis: Redis):
 
     async def handle(envelope: dict) -> None:
         event_type, data = envelope["type"], envelope["data"]
-        if event_type not in FINDING_EVENTS | ASSET_EVENTS | {"assessment.run_completed", GRAPH_ANALYSIS_EVENT}:
+        if event_type not in FINDING_EVENTS | ASSET_EVENTS | {"assessment.run_completed", GRAPH_ANALYSIS_EVENT,
+                                                              EXPOSURE_EVENT}:
             return
         occurred_at = datetime.fromisoformat(envelope["occurred_at"])
+        exposed_assets: list[str] = []
         async with engine.begin() as conn:
             if not await mark_processed(conn, SCHEMA, SCORING_GROUP, envelope["event_id"]):
                 return
-            if event_type in FINDING_EVENTS:
+            if event_type == EXPOSURE_EVENT:
+                exposed_assets = await upsert_exposure_facts(conn, data, occurred_at)
+                applied = bool(exposed_assets)
+            elif event_type in FINDING_EVENTS:
                 applied = await upsert_finding_fact(conn, data, occurred_at)
             elif event_type in ASSET_EVENTS:
                 applied = await upsert_asset_fact(conn, event_type, data, occurred_at)
@@ -54,6 +61,8 @@ def scoring_handler(engine: AsyncEngine, redis: Redis):
             await mark_dirty(redis, controls=[data["control_id"]], assets=[data["asset_id"]])
         elif event_type in ASSET_EVENTS:
             await mark_dirty(redis, assets=[data["asset_id"]])
+        elif event_type == EXPOSURE_EVENT:
+            await mark_dirty(redis, assets=exposed_assets)
         else:
             await mark_dirty(redis)
 

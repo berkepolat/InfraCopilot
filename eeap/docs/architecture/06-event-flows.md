@@ -135,6 +135,7 @@ sequenceDiagram
     E->>E: evaluate controls → FindingDrafts → normalize, fingerprint
     E->>AS: upsert findings, finding_history
     E->>X: finding.created / finding.updated, relationship.observed, discovery.asset_observed
+    O->>X: network.exposure_observed {open services per port-scanned host} (NET runs with a port scan)
     O->>O: all jobs terminal → resolve unobserved findings (full scope only)
     O->>X: assessment.run_completed {stats}
 ```
@@ -162,9 +163,9 @@ sequenceDiagram
     RE->>GDB: node_metrics, concentration_areas
     RE->>X: graph.analysis_completed
 
-    X-->>AI: finding.* / asset.* / assessment.run_completed / graph.analysis_completed
-    AI->>ADB: upsert finding_facts / asset_facts (read model, ADR-0015), mark dirty
-    AI->>AI: every 2 s: rescore dirty control cohorts → assets → org (model v1)
+    X-->>AI: finding.* / asset.* / assessment.run_completed / graph.analysis_completed / network.exposure_observed
+    AI->>ADB: upsert finding_facts / asset_facts / exposure_facts (read model, ADR-0015), mark dirty
+    AI->>AI: every 2 s: rescore dirty control cohorts → assets → org (active model, v2)
     AI->>AI: evaluate correlation rules → risk scenarios
     AI->>AI: MITRE mapping, remediation prioritization
     opt AI_LLM_PROVIDER != none

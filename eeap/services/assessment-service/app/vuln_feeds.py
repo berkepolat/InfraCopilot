@@ -1,7 +1,8 @@
 """Uploaded OSV vulnerability feeds: import into fixed-version ranges and per-host matching for LIN-009.
 
 A feed is an OSV ``all.zip`` downloaded by an administrator (e.g. from
-https://osv-vulnerabilities.storage.googleapis.com/Debian:12/all.zip) and uploaded through the API.
+https://osv-vulnerabilities.storage.googleapis.com/Debian/all.zip) and uploaded through the API, or
+exploitation evidence for the matched CVEs (CISA KEV JSON, EPSS CSV; see ``exploit_data``).
 Nothing is fetched from the internet and no host inventory leaves the platform.
 """
 from __future__ import annotations
@@ -20,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from eeap_shared.utils.events import mark_processed
 
-from . import vulns
+from . import exploit_data, vulns
 from .config import SCHEMA, AssessmentSettings
 from .storage import ObjectStore
 
@@ -122,8 +123,12 @@ async def import_feed(engine: AsyncEngine, store: ObjectStore, settings: Assessm
     async with engine.begin() as conn:
         record = (await conn.execute(text(
             "UPDATE assessment.vuln_feeds SET status = 'importing' WHERE feed_id = CAST(:id AS uuid) "
-            "AND status IN ('queued', 'importing') RETURNING bucket, object_key"), {"id": feed_id})).mappings().first()
+            "AND status IN ('queued', 'importing') RETURNING bucket, object_key, kind"),
+            {"id": feed_id})).mappings().first()
     if record is None:
+        return
+    if record["kind"] != "osv":
+        await _import_exploit_data(engine, store, envelope, group, feed_id, record)
         return
 
     def _scan() -> dict[str, Any]:
@@ -154,12 +159,52 @@ async def import_feed(engine: AsyncEngine, store: ObjectStore, settings: Assessm
     except (FeedError, zipfile.BadZipFile, OSError, EOFError) as exc:
         await _fail(engine, feed_id, str(exc) or exc.__class__.__name__)
         return
+    await _remove_upload(store, record, feed_id)
+    logger.info("vulnerability feed imported", extra={"feed_id": feed_id, "ecosystems": ecosystems,
+                                                       "ranges": sum(per_ecosystem.values())})
+
+
+async def _remove_upload(store: ObjectStore, record: dict, feed_id: str) -> None:
     try:
         await store.remove(record["bucket"], record["object_key"])
     except Exception:  # noqa: BLE001 — the imported data is already committed
         logger.warning("could not remove the uploaded feed object", extra={"feed_id": feed_id})
-    logger.info("vulnerability feed imported", extra={"feed_id": feed_id, "ecosystems": ecosystems,
-                                                       "ranges": sum(per_ecosystem.values())})
+
+
+async def _import_exploit_data(engine: AsyncEngine, store: ObjectStore, envelope: dict, group: str, feed_id: str,
+                               record: dict) -> None:
+    """KEV or EPSS: small enough to parse in memory; each upload replaces the previous data set."""
+    limit = exploit_data.MAX_KEV_BYTES if record["kind"] == "kev" else exploit_data.MAX_EPSS_BYTES
+
+    def _parse() -> dict[str, Any]:
+        with store.open(record["bucket"], record["object_key"]) as fileobj:
+            return exploit_data.parse(record["kind"], fileobj.read(limit + 1))
+
+    try:
+        data = await asyncio.to_thread(_parse)
+    except (exploit_data.ExploitDataError, OSError) as exc:
+        await _fail(engine, feed_id, str(exc) or exc.__class__.__name__)
+        return
+    async with engine.begin() as conn:
+        if not await mark_processed(conn, SCHEMA, group, envelope["event_id"]):
+            return
+        if data["kind"] == "kev":
+            await conn.execute(text("DELETE FROM assessment.vuln_kev"))
+            insert = text("INSERT INTO assessment.vuln_kev (cve, vendor, product, name, date_added, ransomware) "
+                          "VALUES (:c, :v, :p, :n, :d, :r)")
+            params = [{"c": c, "v": v, "p": p, "n": n, "d": d, "r": r} for c, v, p, n, d, r in data["rows"]]
+        else:
+            await conn.execute(text("DELETE FROM assessment.vuln_epss"))
+            insert = text("INSERT INTO assessment.vuln_epss (cve, epss, percentile) VALUES (:c, :e, :p)")
+            params = [{"c": c, "e": e, "p": p} for c, e, p in data["rows"]]
+        for start in range(0, len(params), INSERT_BATCH):
+            await conn.execute(insert, params[start:start + INSERT_BATCH])
+        await conn.execute(text(
+            "UPDATE assessment.vuln_feeds SET status = 'completed', records = :n, newest_modified = :m, "
+            "data_version = :v, error = NULL, completed_at = now() WHERE feed_id = CAST(:id AS uuid)"),
+            {"n": len(params), "m": data["as_of"], "v": data["version"], "id": feed_id})
+    await _remove_upload(store, record, feed_id)
+    logger.info("exploit data imported", extra={"feed_id": feed_id, "kind": data["kind"], "records": len(params)})
 
 
 async def _record_import(conn: AsyncConnection, feed_id: str, feed: dict, per_ecosystem: Counter) -> None:
@@ -209,3 +254,26 @@ async def attach_vulnerabilities(conn: AsyncConnection, linux_hosts: dict[str, d
             "packages_checked": len(packages),
             "vulnerable": vulns.match_packages(packages, ranges, feed["ecosystem"]),
         }
+    await attach_exploit_data(conn, [r["vulnerabilities"] for r in linux_hosts.values()
+                                     if (r.get("vulnerabilities") or {}).get("status") == "ok"])
+
+
+async def attach_exploit_data(conn: AsyncConnection, results: list[dict]) -> None:
+    """Adds KEV listing, EPSS and a per-package exploitability to every vulnerable package group."""
+    groups = [g for r in results for g in r["vulnerable"]]
+    sources = {r["kind"]: r for r in (await conn.execute(text(
+        "SELECT DISTINCT ON (kind) kind, newest_modified, completed_at, data_version FROM assessment.vuln_feeds "
+        "WHERE kind IN ('kev', 'epss') AND status = 'completed' ORDER BY kind, completed_at DESC"))).mappings()}
+    context = {kind: {"as_of": (row["newest_modified"] or row["completed_at"]).isoformat(),
+                      "version": row["data_version"]} for kind, row in sources.items()}
+    for result in results:
+        result["exploit_data"] = context
+    cves = sorted({c for g in groups for c in g["cves"]})
+    if not cves or not sources:
+        return
+    kev = {r["cve"]: dict(r) for r in (await conn.execute(text(
+        "SELECT cve, ransomware FROM assessment.vuln_kev WHERE cve = ANY(:c)"), {"c": cves})).mappings()}
+    epss = {r.cve: (float(r.epss), float(r.percentile)) for r in await conn.execute(text(
+        "SELECT cve, epss, percentile FROM assessment.vuln_epss WHERE cve = ANY(:c)"), {"c": cves})}
+    for group in groups:
+        group.update(exploit_data.assess(group["cves"], kev, epss, "epss" in sources))

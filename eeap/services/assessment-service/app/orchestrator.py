@@ -33,6 +33,7 @@ ORCHESTRATOR_GROUP = "assessment-service.orchestrator"
 ASSESSMENT_STREAM = "eeap.assessment"
 DISCOVERY_STREAM = "eeap.discovery"
 RELATIONSHIP_STREAM = "eeap.relationship"
+EXPOSURE_EVENT = "network.exposure_observed"
 EVIDENCE_RETENTION_DAYS = 365
 
 
@@ -232,6 +233,17 @@ async def upsert_network_services(conn: AsyncConnection, *, run_id: str, hosts: 
     return {"open": len(rows), "closed": closed}
 
 
+async def host_exposure(conn: AsyncConnection, ips: list[str]) -> list[dict]:
+    """Currently open services of the scanned hosts (including ports found by earlier runs), for risk scoring."""
+    rows = (await conn.execute(text(
+        "SELECT host(ip) AS ip, port, service FROM assessment.network_services "
+        "WHERE state = 'open' AND host(ip) = ANY(:ips) ORDER BY ip, port"), {"ips": ips})).mappings().all()
+    services: dict[str, list[dict]] = {ip: [] for ip in ips}
+    for r in rows:
+        services[r["ip"]].append({"port": r["port"], "service": r["service"]})
+    return [{"asset_id": asset_id_for_ip(ip), "ip": ip, "services": s} for ip, s in services.items()]
+
+
 async def load_ssh_pins(conn: AsyncConnection, ips: list[str], port: int) -> dict[str, dict]:
     rows = (await conn.execute(text(
         "SELECT host(ip) AS ip, key_type, fingerprint FROM assessment.ssh_host_keys "
@@ -347,6 +359,12 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
         services = await upsert_network_services(conn, run_id=run_id, hosts=port_hosts,
                                                  scanned_ports=scanned_ports, observed_at=observed_at) \
             if port_hosts else None
+        if port_hosts:
+            await enqueue_event(conn, SCHEMA, ASSESSMENT_STREAM, new_envelope(
+                event_type=EXPOSURE_EVENT, source=settings.service_name, subject=run_id,
+                correlation_id=envelope.get("correlation_id"), causation_id=envelope["event_id"],
+                data={"run_id": run_id, "observed_at": observed_at.isoformat(),
+                      "hosts": await host_exposure(conn, list(port_hosts))}))
         for asset in evaluation.assets:
             await enqueue_event(conn, SCHEMA, DISCOVERY_STREAM, new_envelope(
                 event_type="discovery.asset_observed", source=settings.service_name, subject=asset["asset_id"],
