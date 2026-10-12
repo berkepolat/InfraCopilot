@@ -1,0 +1,5 @@
+# Files run inside Linux containers; CRLF checkouts (core.autocrlf on Windows) break shell scripts.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
