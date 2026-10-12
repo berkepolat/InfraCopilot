@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from .correlation import FindingFact, GraphFact, Scenario, evaluate
+from .remediation import ActiveScenario, OpenFinding, Template, build_roadmap
 from .scoring import ScoreResult, ScoringModel
 
 
@@ -65,6 +66,7 @@ async def correlate(conn: AsyncConnection, model: ScoringModel, gating_status, g
     scenarios = evaluate(rules, findings, graph_of, subject_graph)
     scores: dict[str, ScoreResult] = {}
     detected: list[str] = []
+    active: list[ActiveScenario] = []
     new = 0
     for scenario in scenarios:
         scenario_id, status, inserted = await _upsert(conn, scenario, model.version)
@@ -72,6 +74,20 @@ async def correlate(conn: AsyncConnection, model: ScoringModel, gating_status, g
         new += int(inserted)
         scores[scenario_id] = ScoreResult(scenario.score, model.rating(scenario.score),
                                           {**scenario.factors, "status": status})
+        if status == "active":
+            active.append(ActiveScenario(scenario_id, (scenario.rule_id, scenario.scope_key), scenario.score,
+                                         scenario.title))
+
+    rule_controls = set(controls)
+    current_keys = {(s.rule_id, s.scope_key) for s in scenarios}
+
+    def still_matching(control_id: str) -> set[tuple[str, str]]:
+        if control_id not in rule_controls:
+            return current_keys
+        remaining = [f for f in findings if f.control_id != control_id]
+        return {(s.rule_id, s.scope_key) for s in evaluate(rules, remaining, graph_of, subject_graph)}
+
+    await _store_roadmap(conn, gating_status, gating_lifecycle, active, still_matching)
 
     mitigated = [r[0] for r in await conn.execute(text(
         "UPDATE ai.risk_scenarios SET status = 'mitigated', last_evaluated_at = now() "
@@ -81,6 +97,43 @@ async def correlate(conn: AsyncConnection, model: ScoringModel, gating_status, g
         scores[scenario_id] = ScoreResult(0, model.rating(0), {"status": "mitigated"})
     changed = await store_scores(conn, "scenario", scores, model, "correlation")
     return CorrelationStats(active=len(detected), new=new, mitigated=len(mitigated), scores_changed=changed)
+
+
+async def _store_roadmap(conn: AsyncConnection, gating_status, gating_lifecycle, active: list[ActiveScenario],
+                         still_matching) -> None:
+    findings = [OpenFinding(r.finding_id, r.control_id, int(r.score)) for r in await conn.execute(text("""
+        SELECT f.finding_id::text AS finding_id, f.control_id, s.score
+        FROM ai.finding_facts f
+        JOIN ai.risk_scores s ON s.subject_type = 'finding' AND s.subject_id = f.finding_id::text AND s.is_current
+        WHERE f.status = ANY(:gs) AND f.lifecycle_state = ANY(:gl) AND s.score > 0"""),
+        {"gs": list(gating_status), "gl": list(gating_lifecycle)})]
+    templates = {r.control_id: Template(r.title, r.guidance, r.effort) for r in await conn.execute(text(
+        "SELECT control_id, title, guidance, effort FROM ai.remediation_templates"))}
+    items = build_roadmap(findings, active, templates, still_matching)
+    if items:
+        await conn.execute(text("""
+            INSERT INTO ai.remediation_items (control_id, title, guidance, effort, expected_risk_reduction, priority,
+                                              roadmap_phase, generated_by, finding_ids, scenario_ids, rationale)
+            VALUES (:control_id, :title, :guidance, :effort, :reduction, :priority, :phase, 'template',
+                    CAST(:finding_ids AS uuid[]), CAST(:scenario_ids AS uuid[]), CAST(:rationale AS jsonb))
+            ON CONFLICT (control_id) WHERE generated_by = 'template' AND control_id IS NOT NULL DO UPDATE SET
+                title = EXCLUDED.title, guidance = EXCLUDED.guidance, effort = EXCLUDED.effort,
+                expected_risk_reduction = EXCLUDED.expected_risk_reduction, priority = EXCLUDED.priority,
+                roadmap_phase = EXCLUDED.roadmap_phase, finding_ids = EXCLUDED.finding_ids,
+                scenario_ids = EXCLUDED.scenario_ids, rationale = EXCLUDED.rationale,
+                status = CASE WHEN ai.remediation_items.status = 'done' THEN 'proposed'
+                              ELSE ai.remediation_items.status END"""),
+            [{"control_id": i.control_id, "title": i.title, "guidance": i.guidance, "effort": i.effort,
+              "reduction": i.expected_risk_reduction, "priority": i.priority, "phase": i.roadmap_phase,
+              "finding_ids": i.finding_ids, "scenario_ids": i.scenario_ids, "rationale": json.dumps(i.rationale)}
+             for i in items])
+    # Controls without open risk are done; user decisions (rejected) are kept.
+    await conn.execute(text(
+        "UPDATE ai.remediation_items SET status = CASE WHEN status = 'rejected' THEN status ELSE 'done' END, "
+        "expected_risk_reduction = 0, finding_ids = '{}', scenario_ids = '{}' "
+        "WHERE generated_by = 'template' AND control_id IS NOT NULL AND NOT (control_id = ANY(:controls)) "
+        "AND cardinality(finding_ids) > 0"),
+        {"controls": [i.control_id for i in items]})
 
 
 async def _upsert(conn: AsyncConnection, scenario: Scenario, model_version: str) -> tuple[str, str, bool]:

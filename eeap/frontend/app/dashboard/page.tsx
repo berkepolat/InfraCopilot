@@ -8,8 +8,10 @@ import {
   type Control,
   type GraphAnalysis,
   type Me,
+  type MitreTechnique,
   type Page,
   type Rating,
+  type RemediationItem,
   type RiskSummary,
   type TopFinding,
 } from "@/lib/gateway";
@@ -51,7 +53,7 @@ export default async function Dashboard() {
     throw error;
   }
 
-  const [assets, controls, risk, topFindings, runs, graph, areas] = await Promise.all([
+  const [assets, controls, risk, topFindings, runs, graph, areas, roadmap, mitre] = await Promise.all([
     optional(() => gatewayFetch<Page<Asset>>("/api/v1/assets?limit=100")),
     optional(() => gatewayFetch<Control[]>("/api/v1/controls")),
     optional(() => gatewayFetch<RiskSummary>("/api/v1/risk/summary")),
@@ -59,6 +61,8 @@ export default async function Dashboard() {
     optional(() => gatewayFetch<Page<AssessmentRun>>("/api/v1/assessments/runs?limit=5")),
     optional(() => gatewayFetch<{ analysis: GraphAnalysis | null }>("/api/v1/graph/analysis/latest")),
     optional(() => gatewayFetch<{ items: ConcentrationArea[] }>("/api/v1/graph/concentration-areas?limit=10")),
+    optional(() => gatewayFetch<{ items: RemediationItem[] }>("/api/v1/risk/remediation?limit=20")),
+    optional(() => gatewayFetch<{ techniques: MitreTechnique[] }>("/api/v1/risk/mitre")),
   ]);
   const analysis = graph?.analysis ?? null;
   const canRun = me.permissions.includes("assessments:run");
@@ -140,6 +144,52 @@ export default async function Dashboard() {
                     {s.stages.filter((st) => st.matched).map((st) => st.name).join(" → ")}
                   </td>
                   <td className="muted small">{s.affected_asset_ids.join(", ") || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <h2>Remediation roadmap</h2>
+        {roadmap === null ? <p className="muted">You do not have permission to view the remediation roadmap.</p> : (
+          <table>
+            <thead><tr><th>#</th><th>Phase</th><th>Action</th><th>Effort</th><th>Risk reduction</th><th>Breaks scenarios</th><th>Status</th></tr></thead>
+            <tbody>
+              {roadmap.items.length === 0 && <tr><td colSpan={7} className="muted">No open remediation items.</td></tr>}
+              {roadmap.items.map((i) => (
+                <tr key={i.item_id}>
+                  <td>{i.priority}</td>
+                  <td>{i.roadmap_phase}</td>
+                  <td>
+                    {i.title}
+                    <div className="muted small">
+                      {i.control_id} · {i.open_findings} open finding{i.open_findings === 1 ? "" : "s"}
+                      {i.techniques.length > 0 && ` · ATT&CK ${i.techniques.map((t) => t.technique_id).join(", ")}`}
+                    </div>
+                  </td>
+                  <td>{i.effort}</td>
+                  <td>{i.expected_risk_reduction}%</td>
+                  <td className="muted small">{i.scenarios.map((s) => s.title).join("; ") || "—"}</td>
+                  <td>{i.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <h2>MITRE ATT&amp;CK exposure</h2>
+        {mitre === null ? <p className="muted">You do not have permission to view the ATT&amp;CK mapping.</p> : (
+          <table>
+            <thead><tr><th>Top score</th><th>Technique</th><th>Tactics</th><th>Open findings</th><th>Controls</th></tr></thead>
+            <tbody>
+              {mitre.techniques.length === 0 && <tr><td colSpan={5} className="muted">No open weaknesses mapped to ATT&amp;CK techniques.</td></tr>}
+              {mitre.techniques.map((t) => (
+                <tr key={t.technique_id}>
+                  <td>{t.max_score}</td>
+                  <td><a href={t.url} target="_blank" rel="noreferrer">{t.technique_id}</a> {t.name}</td>
+                  <td className="muted small">{t.tactics.join(", ")}</td>
+                  <td>{t.open_findings}</td>
+                  <td className="muted small">{t.controls.join(", ")}</td>
                 </tr>
               ))}
             </tbody>

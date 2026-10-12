@@ -75,6 +75,31 @@ export type RiskScenario = {
   first_detected_at: string;
 };
 
+export type RemediationItem = {
+  item_id: string;
+  control_id: string | null;
+  title: string;
+  guidance: string;
+  effort: "Low" | "Medium" | "High";
+  expected_risk_reduction: number;
+  priority: number;
+  roadmap_phase: "Immediate" | "Short-term" | "Medium-term" | "Long-term";
+  status: "proposed" | "accepted" | "done" | "rejected";
+  open_findings: number;
+  scenarios: { scenario_id: string; title: string }[];
+  techniques: { technique_id: string; name: string }[];
+};
+
+export type MitreTechnique = {
+  technique_id: string;
+  name: string;
+  tactics: string[];
+  url: string;
+  controls: string[];
+  open_findings: number;
+  max_score: number;
+};
+
 export type TopFinding = {
   finding_id: string;
   score: number;

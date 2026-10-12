@@ -12,7 +12,7 @@ from eeap_shared.utils.internal_auth import Principal, require_permission
 from eeap_shared.utils.service import get_engine
 
 from .config import settings
-from .engine import mark_dirty
+from .engine import GATING_LIFECYCLE, GATING_STATUS, mark_dirty
 
 router = APIRouter(tags=["Risk"])
 
@@ -181,3 +181,80 @@ async def update_scenario(scenario_id: uuid.UUID, payload: ScenarioUpdate, reque
     await mark_dirty(request.app.state.redis)
     async with engine.connect() as conn:
         return await _scenario(conn, scenario_id)
+
+
+RemediationStatus = Literal["proposed", "accepted", "done", "rejected"]
+
+_REMEDIATION_COLUMNS = (
+    "SELECT i.item_id::text AS item_id, i.control_id, i.title, i.guidance, i.effort, i.expected_risk_reduction, "
+    "i.priority, i.roadmap_phase, i.status, i.generated_by, cardinality(i.finding_ids) AS open_findings, "
+    "i.finding_ids::text[] AS finding_ids, i.rationale, i.updated_at, "
+    "coalesce((SELECT json_agg(json_build_object('scenario_id', r.scenario_id, 'title', r.title)) "
+    "          FROM ai.risk_scenarios r WHERE r.scenario_id = ANY(i.scenario_ids)), '[]'::json) AS scenarios, "
+    "coalesce((SELECT json_agg(json_build_object('technique_id', t.technique_id, 'name', t.name) "
+    "                          ORDER BY t.technique_id) "
+    "          FROM ai.control_technique_map m JOIN ai.mitre_techniques t USING (technique_id) "
+    "          WHERE m.control_id = i.control_id), '[]'::json) AS techniques "
+    "FROM ai.remediation_items i ")
+
+
+@router.get("/risk/remediation")
+async def remediation_roadmap(status: list[RemediationStatus] | None = Query(None),
+                              limit: int = Query(100, ge=1, le=500),
+                              _: Principal = Depends(require_permission("risk:read")),
+                              engine: AsyncEngine = Depends(get_engine)):
+    statuses = status or ["proposed", "accepted"]
+    async with engine.connect() as conn:
+        rows = await conn.execute(text(
+            f"{_REMEDIATION_COLUMNS}WHERE i.status = ANY(:statuses) ORDER BY i.status = 'done', i.priority, "
+            "i.control_id LIMIT :limit"), {"statuses": statuses, "limit": limit})
+        return {"items": [dict(r) for r in rows.mappings()]}
+
+
+class RemediationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: RemediationStatus
+
+
+@router.patch("/risk/remediation/{item_id}")
+async def update_remediation(item_id: uuid.UUID, payload: RemediationUpdate,
+                             _: Principal = Depends(require_permission("risk:manage")),
+                             engine: AsyncEngine = Depends(get_engine)):
+    async with engine.begin() as conn:
+        row = (await conn.execute(text(
+            "UPDATE ai.remediation_items SET status = :status WHERE item_id = :id RETURNING item_id"),
+            {"status": payload.status, "id": item_id})).first()
+        if row is None:
+            raise HTTPException(404, detail="remediation item not found")
+        return dict((await conn.execute(text(f"{_REMEDIATION_COLUMNS}WHERE i.item_id = :id"),
+                                        {"id": item_id})).mappings().one())
+
+
+@router.get("/risk/mitre")
+async def mitre_coverage(_: Principal = Depends(require_permission("risk:read")),
+                         engine: AsyncEngine = Depends(get_engine)):
+    """Techniques that open weaknesses may enable (defensive context), with finding counts and top score."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(text("""
+            SELECT t.technique_id, t.name, t.tactics, t.attack_version, t.url,
+                   array_agg(DISTINCT m.control_id ORDER BY m.control_id) AS controls,
+                   count(DISTINCT f.finding_id) AS open_findings, coalesce(max(s.score), 0) AS max_score
+            FROM ai.mitre_techniques t
+            JOIN ai.control_technique_map m ON m.technique_id = t.technique_id
+            JOIN ai.finding_facts f ON f.control_id = m.control_id
+                 AND f.status = ANY(:gs) AND f.lifecycle_state = ANY(:gl)
+            JOIN ai.risk_scores s ON s.subject_type = 'finding' AND s.subject_id = f.finding_id::text
+                 AND s.is_current AND s.score > 0
+            GROUP BY t.technique_id ORDER BY max_score DESC, open_findings DESC, t.technique_id"""),
+            {"gs": list(GATING_STATUS), "gl": list(GATING_LIFECYCLE)})
+        techniques = [dict(r) for r in rows.mappings()]
+    tactics: dict[str, dict] = {}
+    for t in techniques:
+        for tactic in t["tactics"]:
+            entry = tactics.setdefault(tactic, {"tactic": tactic, "techniques": 0, "open_findings": 0, "max_score": 0})
+            entry["techniques"] += 1
+            entry["open_findings"] += t["open_findings"]
+            entry["max_score"] = max(entry["max_score"], t["max_score"])
+    return {"techniques": techniques,
+            "tactics": sorted(tactics.values(), key=lambda e: (-e["max_score"], e["tactic"]))}

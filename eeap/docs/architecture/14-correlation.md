@@ -76,5 +76,5 @@ The dashboard lists the top active scenarios with their matched chain.
 
 ## Next steps
 
-- Remediation items per scenario (`ai.remediation_items`) and MITRE ATT&CK mapping.
+- Remediation roadmap and MITRE ATT&CK mapping: see [doc 15](15-remediation-mitre.md).
 - Optional LLM narratives, labelled advisory and never affecting scores (ADR-0010).
