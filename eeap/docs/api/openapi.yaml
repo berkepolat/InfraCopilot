@@ -500,6 +500,13 @@ paths:
                   maxItems: 256
                   description: IP addresses to probe (NET module). Required for network scans.
                   items: {type: string, minLength: 1, maxLength: 64}
+                ports:
+                  type: array
+                  maxItems: 64
+                  description: >-
+                    Extra TCP ports or ranges ("8081", "9000-9010", at most 1024 ports) scanned on top of
+                    the common enterprise port profile. Requires `targets`; hosts × ports ≤ 60000.
+                  items: {type: string, pattern: '^[0-9]{1,5}(-[0-9]{1,5})?$'}
       responses:
         '202':
           description: Run queued
@@ -568,6 +575,46 @@ paths:
                 privilege_impact: {type: number, minimum: 0, maximum: 1}
       responses:
         '200': {description: Updated}
+
+  /network-services:
+    get:
+      tags: [Assessments]
+      x-permission: assets:read
+      summary: Service inventory discovered by the NET port scan (NET-006 … NET-009)
+      parameters:
+        - {name: ip, in: query, schema: {type: string}}
+        - {name: asset_id, in: query, schema: {type: string}}
+        - {name: port, in: query, schema: {type: integer, minimum: 1, maximum: 65535}}
+        - {name: state, in: query, schema: {type: string, enum: [open, closed], default: open}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+      responses:
+        '200':
+          description: Services ordered by IP and port
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: {type: integer}
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        service_id: {type: string, format: uuid}
+                        asset_id: {type: string}
+                        ip: {type: string}
+                        transport: {type: string, enum: [tcp, udp]}
+                        port: {type: integer}
+                        state: {type: string, enum: [open, closed]}
+                        service: {type: string, description: 'e.g. ssh, rdp, http, mysql, docker'}
+                        product: {type: string, nullable: true}
+                        version: {type: string, nullable: true}
+                        tls_version: {type: string, nullable: true}
+                        details: {type: object, description: 'banner, HTTP server, certificate, RDP NLA'}
+                        first_seen_at: {type: string, format: date-time}
+                        last_seen_at: {type: string, format: date-time}
+                        closed_at: {type: string, format: date-time, nullable: true}
 
   # ------------------------------------------------------------------ Findings
   /findings:

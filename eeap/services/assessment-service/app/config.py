@@ -35,6 +35,8 @@ class AssessmentSettings(ServiceSettings):
     # Comma-separated CIDRs that server-side network probes may target (required for NET runs).
     scan_allowed_cidrs: str | None = None
     net_probe_timeout_seconds: float = 3.0
+    net_port_connect_timeout_seconds: float = 1.0
+    net_port_scan_concurrency: int = 100
 
     def minio_secret_key(self) -> str:
         return read_secret_file(self.minio_secret_key_file) or ""

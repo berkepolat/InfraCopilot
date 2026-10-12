@@ -1,4 +1,4 @@
-"""NET-001..NET-005 evaluators. Pure functions over net_probes snapshots."""
+"""NET-001..NET-009 evaluators. Pure functions over net_probes / port_scan snapshots."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -9,7 +9,18 @@ from ..domain import ImportRow
 from ..targets import asset_id_for_ip
 
 SOURCE_TOOL = "eeap-net-probes/1.0"
-NET_CONTROL_IDS = tuple(f"NET-{n:03d}" for n in range(1, 6))
+NET_CONTROL_IDS = tuple(f"NET-{n:03d}" for n in range(1, 10))
+PORT_SCAN_CONTROLS = ("NET-006", "NET-007", "NET-008", "NET-009")
+
+# control -> port -> (label, severity when exposed, status when exposed); all ports are in COMMON_PORTS.
+REMOTE_ADMIN = {22: "SSH", 3389: "RDP", 5985: "WinRM (HTTP)", 5986: "WinRM (HTTPS)", 5900: "VNC"}
+CLEARTEXT = {21: ("FTP", "Medium"), 23: ("Telnet", "High"), 512: ("rexec", "High"), 513: ("rlogin", "High"),
+             514: ("rsh", "High")}
+DATA_STORES = {1433: "Microsoft SQL Server", 1521: "Oracle", 3306: "MySQL/MariaDB", 5432: "PostgreSQL",
+               5984: "CouchDB", 6379: "Redis", 9200: "Elasticsearch HTTP", 9300: "Elasticsearch transport",
+               11211: "Memcached", 27017: "MongoDB"}
+CONTROL_PLANES = {2375: "Docker Engine API", 2376: "Docker Engine API (TLS)", 2379: "etcd",
+                  6443: "Kubernetes API server", 10250: "Kubelet API"}
 
 
 @dataclass
@@ -130,12 +141,86 @@ def _net005_ntp(ctx: _HostContext) -> None:
                  summary=f"No NTP response observed on {ctx.ip}")
 
 
+def _open_services(ctx: _HostContext, ports) -> list[dict]:
+    services = (ctx.host["probes"].get("ports") or {}).get("open") or []
+    return [s for s in services if s["port"] in ports]
+
+
+def _service_details(service: dict) -> dict:
+    keys = ("service", "product", "version", "tls_version", "subject_cn", "self_signed", "nla_required",
+            "http_server")
+    return {k: service[k] for k in keys if k in service}
+
+
+def _net006_remote_admin(ctx: _HostContext) -> None:
+    exposed = _open_services(ctx, REMOTE_ADMIN)
+    for s in exposed:
+        label, port = REMOTE_ADMIN[s["port"]], s["port"]
+        if port == 3389 and s.get("nla_required") is False:
+            ctx.emit("NET-006", "FAIL", subject=f"tcp:{port}", severity="High",
+                     summary=f"RDP on {ctx.ip}:{port} accepts connections without Network Level Authentication",
+                     **_service_details(s))
+        else:
+            ctx.emit("NET-006", "WARNING", subject=f"tcp:{port}", severity="Medium",
+                     summary=f"{label} remote administration is reachable on {ctx.ip}:{port}; restrict it to "
+                             "management networks", **_service_details(s))
+    if not exposed:
+        ctx.emit("NET-006", "PASS", subject="remote-admin",
+                 summary=f"No remote administration service (SSH, RDP, WinRM, VNC) reachable on {ctx.ip}")
+
+
+def _net007_cleartext(ctx: _HostContext) -> None:
+    exposed = _open_services(ctx, CLEARTEXT)
+    for s in exposed:
+        label, severity = CLEARTEXT[s["port"]]
+        ctx.emit("NET-007", "FAIL", subject=f"tcp:{s['port']}", severity=severity,
+                 summary=f"{label} on {ctx.ip}:{s['port']} transmits credentials and data in clear text",
+                 **_service_details(s))
+    if not exposed:
+        ctx.emit("NET-007", "PASS", subject="cleartext",
+                 summary=f"No cleartext legacy protocol (FTP, Telnet, r-services) reachable on {ctx.ip}")
+
+
+def _net008_data_stores(ctx: _HostContext) -> None:
+    exposed = _open_services(ctx, DATA_STORES)
+    for s in exposed:
+        label = DATA_STORES[s["port"]]
+        ctx.emit("NET-008", "WARNING", subject=f"tcp:{s['port']}", severity="Medium",
+                 summary=f"{label} is reachable on {ctx.ip}:{s['port']}; data stores should only accept "
+                         "connections from their application tier", **_service_details(s))
+    if not exposed:
+        ctx.emit("NET-008", "PASS", subject="data-stores",
+                 summary=f"No database or cache service reachable on {ctx.ip}")
+
+
+def _net009_control_planes(ctx: _HostContext) -> None:
+    exposed = _open_services(ctx, CONTROL_PLANES)
+    for s in exposed:
+        label, port = CONTROL_PLANES[s["port"]], s["port"]
+        unencrypted = port == 2375 or (port == 2379 and not s.get("tls_version"))
+        if unencrypted:
+            ctx.emit("NET-009", "FAIL", subject=f"tcp:{port}", severity="High",
+                     summary=f"{label} on {ctx.ip}:{port} is reachable without TLS; such endpoints commonly "
+                             "grant full control of the host or cluster", **_service_details(s))
+        else:
+            ctx.emit("NET-009", "WARNING", subject=f"tcp:{port}", severity="Medium",
+                     summary=f"{label} is reachable on {ctx.ip}:{port}; restrict it to administrators' networks",
+                     **_service_details(s))
+    if not exposed:
+        ctx.emit("NET-009", "PASS", subject="control-planes",
+                 summary=f"No container or orchestration control plane reachable on {ctx.ip}")
+
+
 EVALUATORS: dict[str, Callable[[_HostContext], None]] = {
     "NET-001": _net001_dns_axfr,
     "NET-002": _net002_tls,
     "NET-003": _net003_smb,
     "NET-004": _net004_snmp,
     "NET-005": _net005_ntp,
+    "NET-006": _net006_remote_admin,
+    "NET-007": _net007_cleartext,
+    "NET-008": _net008_data_stores,
+    "NET-009": _net009_control_planes,
 }
 
 
@@ -164,6 +249,8 @@ def evaluate(snapshot: dict, control_ids: list[str] | None, now: datetime) -> Ev
     for host in snapshot.get("hosts") or []:
         ctx = _HostContext(host, now)
         for control_id in selected:
+            if control_id in PORT_SCAN_CONTROLS and "ports" not in host["probes"]:
+                continue
             EVALUATORS[control_id](ctx)
         observations.extend(ctx.rows)
     return Evaluation(observations=observations, assets=discovered_assets(snapshot.get("hosts") or []),

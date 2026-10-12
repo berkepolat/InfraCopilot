@@ -11,6 +11,7 @@ export async function POST(request: Request) {
   const payload: Record<string, unknown> = {};
   if (Array.isArray(body.control_ids)) payload.control_ids = body.control_ids;
   if (Array.isArray(body.targets)) payload.targets = body.targets;
+  if (Array.isArray(body.ports)) payload.ports = body.ports;
   try {
     const run = await gatewayFetch<{ run_id: string; status: string }>("/api/v1/assessments/runs", {
       method: "POST",

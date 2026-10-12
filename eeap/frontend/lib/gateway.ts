@@ -139,11 +139,14 @@ export type AssessmentRun = {
   trigger: string;
   status: string;
   control_ids: string[];
-  scope?: { ips?: string[] };
+  scope?: { ips?: string[]; ports?: number[] };
   stats: {
     module?: string;
     domain?: string;
     targets?: string[];
+    ports_scanned?: number;
+    open_ports?: number;
+    closed_ports?: number;
     error?: string;
     created?: number;
     updated?: number;
@@ -178,6 +181,22 @@ export type ConcentrationArea = {
   anchor_node_id: string;
   anchor_node_type: string;
   anchor_display_name: string;
+};
+
+export type NetworkService = {
+  service_id: string;
+  asset_id: string;
+  ip: string;
+  transport: string;
+  port: number;
+  state: "open" | "closed";
+  service: string;
+  product: string | null;
+  version: string | null;
+  tls_version: string | null;
+  details: Record<string, unknown>;
+  first_seen_at: string;
+  last_seen_at: string;
 };
 
 export type Me = { user_id: string; username: string; roles: string[]; permissions: string[] };

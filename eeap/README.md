@@ -18,8 +18,9 @@ library, the six services, the frontend, Dockerfiles, health/metrics endpoints, 
 authentication, RBAC, audit logging, rate limiting, internal service tokens and the
 transactional outbox / Redis Streams event pipeline. Findings can be imported and are risk
 scored automatically. **AD-001 … AD-010** are implemented as a read-only LDAPS configuration
-assessment ([doc 11](docs/architecture/11-ad-assessment.md)). **NET-001 … NET-005** probe an
-explicit IP list authorized by `SCAN_ALLOWED_CIDRS` ([doc 12](docs/architecture/12-net-assessment.md)).
+assessment ([doc 11](docs/architecture/11-ad-assessment.md)). **NET-001 … NET-009** probe an
+explicit IP list authorized by `SCAN_ALLOWED_CIDRS`, including TCP port discovery with service
+identification (open ports, product/version, TLS, RDP NLA) into a network service inventory ([doc 12](docs/architecture/12-net-assessment.md)).
 AD runs also feed the exposure graph; the Relationship Engine computes Tier-0 reachability and
 risk concentration areas, which drive the propagation factor R of the risk score
 ([doc 13](docs/architecture/13-graph-analytics.md)). Correlation rules combine open findings and

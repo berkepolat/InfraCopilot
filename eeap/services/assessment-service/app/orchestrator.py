@@ -15,6 +15,7 @@ from eeap_shared.utils.events import enqueue_event, mark_processed, new_envelope
 
 from .ad_relationships import build_relationships
 from .collectors.ad_ldap import AdCollectionError, collect as collect_ad
+from .collectors import port_scan
 from .collectors.net_probes import NetCollectionError, collect_targets as collect_net
 from .config import SCHEMA, AssessmentSettings
 from .controls import ad as ad_controls
@@ -95,7 +96,7 @@ def run_handler(engine: AsyncEngine, store: ObjectStore, settings: AssessmentSet
         try:
             if scope.get("ips"):
                 await _execute_net(engine, store, settings, run_id, list(run["control_ids"]) or None,
-                                   list(scope["ips"]), envelope)
+                                   list(scope["ips"]), envelope, extra_ports=list(scope.get("ports") or []))
             else:
                 await _execute_ad(engine, store, settings, run_id, list(run["control_ids"]) or None, envelope)
         except (AdCollectionError, NetCollectionError) as exc:
@@ -193,8 +194,39 @@ async def _execute_ad(engine: AsyncEngine, store: ObjectStore, settings: Assessm
                                                       "resolved": resolved["updated"]})
 
 
+async def upsert_network_services(conn: AsyncConnection, *, run_id: str, hosts: dict[str, dict],
+                                  scanned_ports: list[int], observed_at: datetime) -> dict[str, int]:
+    """Service inventory: upserts open ports, closes previously open ports that were scanned again."""
+    rows = [{"asset": asset_id_for_ip(ip), "ip": ip, "port": s["port"], "service": s.get("service", "unknown"),
+             "product": s.get("product"), "version": s.get("version"), "tls": s.get("tls_version"),
+             "details": json.dumps({k: v for k, v in s.items()
+                                    if k not in ("port", "transport", "service", "product", "version",
+                                                 "tls_version")}, default=str),
+             "at": observed_at, "run": run_id}
+            for ip, host in hosts.items() for s in host["open"]]
+    if rows:
+        await conn.execute(text(
+            "INSERT INTO assessment.network_services (asset_id, ip, port, state, service, product, version, "
+            "tls_version, details, first_seen_at, last_seen_at, first_seen_run_id, last_seen_run_id) "
+            "VALUES (:asset, CAST(:ip AS inet), :port, 'open', :service, :product, :version, :tls, "
+            "CAST(:details AS jsonb), :at, :at, CAST(:run AS uuid), CAST(:run AS uuid)) "
+            "ON CONFLICT (ip, transport, port) DO UPDATE SET asset_id = EXCLUDED.asset_id, state = 'open', "
+            "service = EXCLUDED.service, product = EXCLUDED.product, version = EXCLUDED.version, "
+            "tls_version = EXCLUDED.tls_version, details = EXCLUDED.details, last_seen_at = EXCLUDED.last_seen_at, "
+            "last_seen_run_id = EXCLUDED.last_seen_run_id, closed_at = NULL, updated_at = now(), "
+            "first_seen_at = CASE WHEN network_services.state = 'closed' THEN EXCLUDED.first_seen_at "
+            "ELSE network_services.first_seen_at END"), rows)
+    closed = (await conn.execute(text(
+        "UPDATE assessment.network_services SET state = 'closed', closed_at = :at, updated_at = now() "
+        "WHERE state = 'open' AND host(ip) = ANY(:ips) AND port = ANY(:ports) "
+        "AND last_seen_run_id IS DISTINCT FROM CAST(:run AS uuid)"),
+        {"at": observed_at, "ips": list(hosts), "ports": scanned_ports, "run": run_id})).rowcount
+    return {"open": len(rows), "closed": closed}
+
+
 async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: AssessmentSettings, run_id: str,
-                       requested: list[str] | None, ips: list[str], envelope: dict) -> None:
+                       requested: list[str] | None, ips: list[str], envelope: dict,
+                       extra_ports: list[int] | None = None) -> None:
     if not ips:
         raise NetCollectionError("network assessment requires at least one IP in scope.ips")
     async with engine.connect() as conn:
@@ -204,8 +236,22 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
     if not control_ids:
         raise NetCollectionError("no enabled NET controls were selected")
 
+    port_hosts: dict[str, dict] = {}
+    scanned_ports: list[int] = []
+    if any(c in net_controls.PORT_SCAN_CONTROLS for c in control_ids):
+        scanned_ports = port_scan.scan_ports(extra_ports or [])
+        port_hosts = await port_scan.scan_hosts(
+            ips, scanned_ports, timeout=settings.net_port_connect_timeout_seconds,
+            identify_timeout=settings.net_probe_timeout_seconds, concurrency=settings.net_port_scan_concurrency)
+    probe_controls = [c for c in control_ids if c not in net_controls.PORT_SCAN_CONTROLS]
     snapshot = await asyncio.to_thread(
-        collect_net, ips, control_ids=control_ids, timeout=settings.net_probe_timeout_seconds)
+        collect_net, ips, control_ids=probe_controls, timeout=settings.net_probe_timeout_seconds)
+    if port_hosts:
+        snapshot["control_ids"] = control_ids
+        snapshot["port_scan"] = {"collector": port_scan.COLLECTOR_ID, "version": port_scan.COLLECTOR_VERSION,
+                                 "ports": scanned_ports}
+        for host in snapshot["hosts"]:
+            host["probes"]["ports"] = port_hosts[host["ip"]]
     observed_at = datetime.fromisoformat(snapshot["collected_at"])
     evaluation = net_controls.evaluate(snapshot, control_ids, observed_at)
 
@@ -229,6 +275,9 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
                                                       source="server", observed_at=observed_at, controls=controls)
         resolved = await resolve_unobserved_net(conn, run_id=run_id, control_ids=evaluation.evaluated_controls,
                                                 ips=ips, observed_at=observed_at, controls=controls)
+        services = await upsert_network_services(conn, run_id=run_id, hosts=port_hosts,
+                                                 scanned_ports=scanned_ports, observed_at=observed_at) \
+            if port_hosts else None
         for asset in evaluation.assets:
             await enqueue_event(conn, SCHEMA, DISCOVERY_STREAM, new_envelope(
                 event_type="discovery.asset_observed", source=settings.service_name, subject=asset["asset_id"],
@@ -243,6 +292,9 @@ async def _execute_net(engine: AsyncEngine, store: ObjectStore, settings: Assess
             "by_severity": {k.split(":", 1)[1]: v for k, v in outcome.items() if k.startswith("severity:")},
             "assets_observed": len(evaluation.assets), "evidence_object": object_key, "errors": rejected[:50],
         }
+        if services is not None:
+            stats.update(ports_scanned=len(scanned_ports), open_ports=services["open"],
+                         closed_ports=services["closed"])
         await _finish(engine, settings, run_id, "partially_completed" if rejected else "completed", stats,
                       envelope, conn=conn, full_scope=False)
     logger.info("NET assessment run completed", extra={"run_id": run_id, "targets": len(ips),

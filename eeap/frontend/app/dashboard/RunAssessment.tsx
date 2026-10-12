@@ -18,6 +18,7 @@ export function RunAssessment() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [targets, setTargets] = useState("");
+  const [ports, setPorts] = useState("");
 
   async function start(body: Record<string, unknown>, label: string) {
     setBusy(true);
@@ -52,7 +53,8 @@ export function RunAssessment() {
       setMessage("enter one or more IP addresses to scan");
       return;
     }
-    await start({ targets: ips }, "network scan");
+    const extraPorts = parseIpList(ports);
+    await start(extraPorts.length ? { targets: ips, ports: extraPorts } : { targets: ips }, "network scan");
   }
 
   return (
@@ -72,6 +74,16 @@ export function RunAssessment() {
           onChange={(event) => setTargets(event.target.value)}
           placeholder={"10.0.0.10\n10.0.0.20"}
           rows={3}
+          disabled={busy}
+        />
+        <label className="muted small" htmlFor="net-ports">
+          Extra TCP ports (optional, common enterprise ports are always scanned)
+        </label>
+        <input
+          id="net-ports"
+          value={ports}
+          onChange={(event) => setPorts(event.target.value)}
+          placeholder="8081, 9000-9010"
           disabled={busy}
         />
         <button onClick={startNet} disabled={busy}>

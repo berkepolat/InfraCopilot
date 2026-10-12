@@ -81,20 +81,28 @@ class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     control_ids: list[str] | None = Field(default=None, max_length=50)
-    # When set, runs NET-001..005 probes against these IP addresses (see SCAN_ALLOWED_CIDRS).
+    # When set, runs the NET controls against these IP addresses (see SCAN_ALLOWED_CIDRS).
     targets: list[str] | None = Field(default=None, max_length=256)
+    # Extra TCP ports or ranges ("8081", "9000-9010") scanned on top of the common port profile.
+    ports: list[str] | None = Field(default=None, max_length=64)
 
 
 @router.post("/assessments/runs", status_code=202)
 async def start_run(payload: RunRequest, principal: Principal = Depends(require_permission("assessments:run")),
                     engine: AsyncEngine = Depends(get_engine)):
+    from .collectors.port_scan import MAX_CONNECTIONS_PER_RUN, PortSpecError, parse_ports, scan_ports
     from .targets import TargetError, authorize_targets, parse_targets
 
     module = "NET" if payload.targets else "AD"
+    if payload.ports and module != "NET":
+        raise HTTPException(422, detail="ports require targets (network assessment)")
     try:
         ips = authorize_targets(parse_targets(payload.targets), settings.scan_allowed_cidrs) if module == "NET" else []
-    except TargetError as exc:
+        extra_ports = parse_ports(payload.ports)
+    except (TargetError, PortSpecError) as exc:
         raise HTTPException(422, detail=str(exc)) from exc
+    if len(ips) * len(scan_ports(extra_ports)) > MAX_CONNECTIONS_PER_RUN:
+        raise HTTPException(422, detail=f"targets x ports exceeds {MAX_CONNECTIONS_PER_RUN} connections per run")
 
     async with engine.begin() as conn:
         enabled = set((await conn.execute(text(
@@ -116,6 +124,8 @@ async def start_run(payload: RunRequest, principal: Principal = Depends(require_
         if busy:
             raise HTTPException(409, detail=f"assessment run {busy} is still in progress")
         scope = {"ips": ips} if ips else {}
+        if extra_ports:
+            scope["ports"] = extra_ports
         full_scope = module == "AD"
         run_id = (await conn.execute(
             text("INSERT INTO assessment.assessment_runs "
@@ -214,6 +224,34 @@ async def get_import(import_id: uuid.UUID, _: Principal = Depends(require_permis
     if row is None:
         raise HTTPException(404, detail="import not found")
     return dict(row)
+
+
+# ------------------------------------------------------------------------------------ network services
+
+@router.get("/network-services")
+async def list_network_services(
+    limit: int = Query(200, ge=1, le=1000),
+    ip: str | None = Query(None, max_length=45),
+    asset_id: str | None = Query(None, max_length=128),
+    port: int | None = Query(None, ge=1, le=65535),
+    state: Literal["open", "closed"] | None = "open",
+    _: Principal = Depends(require_permission("assets:read")),
+    engine: AsyncEngine = Depends(get_engine),
+):
+    clauses, params = ["TRUE"], {"limit": limit}
+    if ip is not None:
+        clauses.append("host(ip) = :ip")
+        params["ip"] = ip
+    for name, value in (("asset_id", asset_id), ("port", port), ("state", state)):
+        if value is not None:
+            clauses.append(f"{name} = :{name}")
+            params[name] = value
+    sql = ("SELECT service_id, asset_id, host(ip) AS ip, transport, port, state, service, product, version, "
+           "tls_version, details, first_seen_at, last_seen_at, last_seen_run_id, closed_at "
+           f"FROM assessment.network_services WHERE {' AND '.join(clauses)} ORDER BY network_services.ip, port LIMIT :limit")
+    async with engine.connect() as conn:
+        items = [dict(r) for r in (await conn.execute(text(sql), params)).mappings()]
+    return {"items": items, "count": len(items)}
 
 
 # ------------------------------------------------------------------------------------------- findings

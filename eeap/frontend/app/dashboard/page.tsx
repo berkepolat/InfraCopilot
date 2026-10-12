@@ -9,6 +9,7 @@ import {
   type GraphAnalysis,
   type Me,
   type MitreTechnique,
+  type NetworkService,
   type Page,
   type Rating,
   type RemediationItem,
@@ -27,7 +28,8 @@ function runSummary(run: AssessmentRun): string {
   if (s.created === undefined) return "";
   if (s.module === "NET" || (s.targets && s.targets.length)) {
     const n = s.targets?.length ?? 0;
-    return `NET · ${n} IP${n === 1 ? "" : "s"} · ${s.created} new, ${s.updated ?? 0} changed, ${s.resolved ?? 0} resolved`;
+    const ports = s.open_ports !== undefined ? ` · ${s.open_ports} open port${s.open_ports === 1 ? "" : "s"}` : "";
+    return `NET · ${n} IP${n === 1 ? "" : "s"}${ports} · ${s.created} new, ${s.updated ?? 0} changed, ${s.resolved ?? 0} resolved`;
   }
   const rels = s.relationships !== undefined ? ` · ${s.relationships} relationships` : "";
   return `${s.domain ?? "AD"} · ${s.created} new, ${s.updated ?? 0} changed, ${s.resolved ?? 0} resolved${rels}`;
@@ -55,7 +57,7 @@ export default async function Dashboard() {
     throw error;
   }
 
-  const [assets, controls, risk, topFindings, runs, graph, areas, roadmap, mitre, reports] = await Promise.all([
+  const [assets, controls, risk, topFindings, runs, graph, areas, roadmap, mitre, reports, services] = await Promise.all([
     optional(() => gatewayFetch<Page<Asset>>("/api/v1/assets?limit=100")),
     optional(() => gatewayFetch<Control[]>("/api/v1/controls")),
     optional(() => gatewayFetch<RiskSummary>("/api/v1/risk/summary")),
@@ -66,6 +68,7 @@ export default async function Dashboard() {
     optional(() => gatewayFetch<{ items: RemediationItem[] }>("/api/v1/risk/remediation?limit=20")),
     optional(() => gatewayFetch<{ techniques: MitreTechnique[] }>("/api/v1/risk/mitre")),
     optional(() => gatewayFetch<Page<Report>>("/api/v1/reports?limit=10")),
+    optional(() => gatewayFetch<{ items: NetworkService[] }>("/api/v1/network-services?state=open&limit=200")),
   ]);
   const analysis = graph?.analysis ?? null;
   const canRun = me.permissions.includes("assessments:run");
@@ -280,6 +283,29 @@ export default async function Dashboard() {
               Analysed {new Date(analysis.completed_at).toLocaleString("en-GB", { timeZone: "UTC" })} UTC.
             </p>
           </>
+        )}
+
+        <h2>Network services{services ? ` (${services.items.length} open)` : ""}</h2>
+        {services === null ? <p className="muted">You do not have permission to view network services.</p> : (
+          <table>
+            <thead><tr><th>Host</th><th>Port</th><th>Service</th><th>Product</th><th>TLS</th><th>Last seen</th></tr></thead>
+            <tbody>
+              {services.items.length === 0 && <tr><td colSpan={6} className="muted">No open ports discovered. Run a network scan.</td></tr>}
+              {services.items.map((s) => (
+                <tr key={s.service_id}>
+                  <td>{s.ip}<div className="muted small">{s.asset_id}</div></td>
+                  <td>{s.port}/{s.transport}</td>
+                  <td>{s.service}</td>
+                  <td className="small">
+                    {[s.product, s.version].filter(Boolean).join(" ") || "—"}
+                    {typeof s.details.banner === "string" && <div className="muted small">{s.details.banner}</div>}
+                  </td>
+                  <td className="small">{s.tls_version ?? "—"}</td>
+                  <td className="small">{new Date(s.last_seen_at).toLocaleString("en-GB", { timeZone: "UTC" })} UTC</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
 
         <h2>Assets</h2>
