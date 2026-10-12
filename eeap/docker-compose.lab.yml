@@ -1,4 +1,5 @@
-# Test lab: a Samba AD domain controller seeded with configuration weaknesses for AD-001..AD-010.
+# Test lab: a Samba AD domain controller seeded with configuration weaknesses for AD-001..AD-010,
+# plus deliberately exposed network targets (lab-legacy, lab-redis, lab-etcd) for NET-006..009.
 # Development and demonstration only — never include this file in production deployments.
 #
 #   ./scripts/lab-setup.sh
@@ -26,6 +27,39 @@ services:
     networks:
       eeap-scan:
         aliases: [dc1.lab.eeap.local]
+
+  # Deliberately exposed NET targets (port discovery demo, NET-006..009). Reachable only on eeap-scan.
+  lab-legacy:
+    profiles: [app]
+    build:
+      context: ./infrastructure/lab/legacy-host
+    image: ${EEAP_REGISTRY:-eeap}/lab-legacy-host:${EEAP_VERSION:-0.1.0}
+    hostname: legacy1
+    restart: unless-stopped
+    networks:
+      eeap-scan:
+        aliases: [legacy1.lab.eeap.local]
+
+  lab-redis:
+    profiles: [app]
+    image: redis:7.4-alpine
+    command: ["redis-server", "--protected-mode", "no", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+    read_only: true
+    networks:
+      eeap-scan:
+        aliases: [cache1.lab.eeap.local]
+
+  lab-etcd:
+    profiles: [app]
+    image: quay.io/coreos/etcd:v3.5.17
+    command: ["etcd", "--name", "lab-etcd", "--data-dir", "/tmp/etcd",
+              "--listen-client-urls", "http://0.0.0.0:2379", "--advertise-client-urls", "http://lab-etcd:2379"]
+    restart: unless-stopped
+    tmpfs: [/tmp]
+    networks:
+      eeap-scan:
+        aliases: [etcd1.lab.eeap.local]
 
   assessment-worker:
     environment:

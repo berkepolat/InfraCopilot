@@ -95,6 +95,19 @@ NET-006 … NET-009 are mapped to ATT&CK techniques (T1021.*, T1133, T1040, T121
 T1610) with remediation templates in the AI engine (`ai_0006`), so they flow into the risk
 scores, roadmap and reports.
 
+### Lab targets
+
+`docker-compose.lab.yml` adds deliberately exposed targets on `eeap-scan` (no account can log in):
+
+| Service | Exposes | Expected result |
+|---|---|---|
+| `lab-legacy` | SSH 22, FTP 21, Telnet 23 | NET-006 WARNING, NET-007 FAIL (Telnet High) |
+| `lab-redis` | Redis 6379 without authentication | NET-008 WARNING |
+| `lab-etcd` | etcd 2379 over plain HTTP | NET-009 FAIL High |
+
+Find their addresses with `docker network inspect eeap_eeap-scan` and set `SCAN_ALLOWED_CIDRS`
+to that subnet.
+
 ## API / UI
 
 ```bash
